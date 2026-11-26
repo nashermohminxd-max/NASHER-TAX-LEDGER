@@ -12,6 +12,7 @@ import type {
   LedgerRow,
   TinRecord,
 } from '../types/tax';
+import { getLatestPeriodFromRows } from './taxEngine';
 
 export const DEFAULT_ACCOUNT_TITLES = [
   'COST OF GOODS SOLD',
@@ -47,6 +48,8 @@ export function getClientStorageKeys(clientId: string) {
     PURCHASES: `ph_taxledger_c_${clientId}_purchases_v1`,
     TINS: `ph_taxledger_c_${clientId}_tins_v1`,
     ACCOUNT_TITLES: `ph_taxledger_c_${clientId}_accounts_v1`,
+    MONTH_COVER: `ph_taxledger_c_${clientId}_month_cover_v1`,
+    YEAR_COVER: `ph_taxledger_c_${clientId}_year_cover_v1`,
   };
 }
 
@@ -160,13 +163,23 @@ export function loadClientWorkspace(clientId: string): {
   purchasesRows: LedgerRow[];
   tinDirectory: TinRecord[];
   accountTitles: string[];
+  monthCover: string;
+  yearCover: string;
 } {
   const keys = getClientStorageKeys(clientId);
+  const salesRows = upgradeSalesRows(safeLoadJson<LedgerRow[]>(keys.SALES, []));
+  const purchasesRows = upgradePurchasesRows(safeLoadJson<LedgerRow[]>(keys.PURCHASES, []));
+  const latest = getLatestPeriodFromRows([...salesRows, ...purchasesRows]);
+  const savedMonth = safeLoadJson<string>(keys.MONTH_COVER, '');
+  const savedYear = safeLoadJson<string>(keys.YEAR_COVER, '');
+
   return {
-    salesRows: upgradeSalesRows(safeLoadJson<LedgerRow[]>(keys.SALES, [])),
-    purchasesRows: upgradePurchasesRows(safeLoadJson<LedgerRow[]>(keys.PURCHASES, [])),
+    salesRows,
+    purchasesRows,
     tinDirectory: upgradeTinRecords(safeLoadJson<TinRecord[]>(keys.TINS, [])),
     accountTitles: safeLoadJson<string[]>(keys.ACCOUNT_TITLES, DEFAULT_ACCOUNT_TITLES),
+    monthCover: savedMonth || latest.month,
+    yearCover: savedYear || latest.year,
   };
 }
 
@@ -195,18 +208,23 @@ export function deleteClientWorkspaceStorage(clientId: string): void {
     localStorage.removeItem(keys.PURCHASES);
     localStorage.removeItem(keys.TINS);
     localStorage.removeItem(keys.ACCOUNT_TITLES);
+    localStorage.removeItem(keys.MONTH_COVER);
+    localStorage.removeItem(keys.YEAR_COVER);
   } catch {
     // ignore
   }
 }
 
 export function buildClientWorkspaceBackup(client: ClientProfile): ClientWorkspaceBackup {
-  const data = loadClientWorkspace(client.id);
+  const { salesRows, purchasesRows, tinDirectory, accountTitles } = loadClientWorkspace(client.id);
   return {
     version: 1,
     exportedAt: new Date().toISOString(),
     client,
-    ...data,
+    salesRows,
+    purchasesRows,
+    tinDirectory,
+    accountTitles,
   };
 }
 

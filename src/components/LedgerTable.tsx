@@ -7,11 +7,14 @@ import {
   Edit3,
   FileSpreadsheet,
   Filter,
+  Flag,
   Search,
+  ShieldCheck,
   Trash2,
   Wrench,
 } from 'lucide-react';
 import type {
+  AuditStatus,
   EntityType,
   LedgerMode,
   LedgerRow,
@@ -24,11 +27,19 @@ import {
   computeLedgerTotals,
   formatAccounting,
   getRowExpectedActual,
+  sortMonthsChronologically,
 } from '../utils/taxEngine';
 
 interface LedgerTableProps {
   mode: LedgerMode;
+  entryKindLabel?: string;
   rows: LedgerRow[];
+  monthCover: string;
+  yearCover: string;
+  totalModeRowCount: number;
+  isAdminMode?: boolean;
+  onSetAuditStatus?: (rowId: string, status: AuditStatus) => void;
+  onShowAllMonths: () => void;
   onEditRow: (row: LedgerRow) => void;
   onDuplicateNextCategory: (row: LedgerRow) => void;
   onDeleteRow: (id: string) => void;
@@ -42,17 +53,21 @@ interface LedgerTableProps {
 
 export const LedgerTable: React.FC<LedgerTableProps> = ({
   mode,
+  entryKindLabel,
   rows,
+  monthCover,
+  yearCover,
+  isAdminMode = false,
+  onSetAuditStatus,
   onEditRow,
   onDuplicateNextCategory,
   onDeleteRow,
   onFixMathRow,
   onComputeActualRow,
-  onStartNewEntry,
-  onImportCsvClick,
   needsReviewOnly,
   onToggleNeedsReviewOnly,
 }) => {
+  const displayModeName = entryKindLabel ?? mode;
   const [searchQuery, setSearchQuery] = useState('');
   const [monthFilter, setMonthFilter] = useState<string>('ALL');
   const [categoryFilter, setCategoryFilter] = useState<'ALL' | TransactionCategory>('ALL');
@@ -68,8 +83,10 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
     rows.forEach((r) => {
       if (r.month.trim()) set.add(r.month.trim().toUpperCase());
     });
-    return Array.from(set);
+    return sortMonthsChronologically(Array.from(set));
   }, [rows]);
+
+  const effectiveMonthFilter = monthCover === 'ALL' ? monthFilter : 'ALL';
 
   const rowAudits = useMemo(() => {
     const map = new Map<string, ReturnType<typeof auditRow>>();
@@ -90,7 +107,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return rows.filter((r) => {
-      if (monthFilter !== 'ALL' && r.month.toUpperCase() !== monthFilter) return false;
+      if (effectiveMonthFilter !== 'ALL' && r.month.toUpperCase() !== effectiveMonthFilter) return false;
       if (categoryFilter !== 'ALL' && r.category !== categoryFilter) return false;
       if (mode === 'SALES' && entityFilter !== 'ALL' && r.privateOrGovt !== entityFilter) return false;
       if (mode === 'PURCHASES' && classFilter !== 'ALL' && (r.payeeClassification ?? 'N/A') !== classFilter) return false;
@@ -106,7 +123,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
     rows,
     mode,
     searchQuery,
-    monthFilter,
+    effectiveMonthFilter,
     categoryFilter,
     entityFilter,
     classFilter,
@@ -129,7 +146,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
 
   const hasActiveFilters =
     searchQuery !== '' ||
-    monthFilter !== 'ALL' ||
+    effectiveMonthFilter !== 'ALL' ||
     categoryFilter !== 'ALL' ||
     (mode === 'SALES' && entityFilter !== 'ALL') ||
     (mode === 'PURCHASES' && (classFilter !== 'ALL' || agentFilter !== 'ALL')) ||
@@ -141,9 +158,9 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
       : ['ALL', 'GOODS', 'SERVICES', 'RENTAL'];
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+    <section className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl overflow-hidden shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
       {/* Filter Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/70 px-5 py-3.5">
         <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-[240px]">
           <div className="relative flex-1 min-w-[200px] max-w-xs">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
@@ -160,19 +177,21 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
             />
           </div>
 
-          <select
-            value={monthFilter}
-            onChange={(e) => setMonthFilter(e.target.value)}
-            aria-label="Filter by month"
-            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 focus:border-blue-600 focus:outline-none"
-          >
-            <option value="ALL">All Months</option>
-            {availableMonths.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+          {monthCover === 'ALL' && (
+            <select
+              value={monthFilter}
+              onChange={(e) => setMonthFilter(e.target.value)}
+              aria-label="Filter by month"
+              className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 focus:border-blue-600 focus:outline-none"
+            >
+              <option value="ALL">All Months</option>
+              {availableMonths.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          )}
 
           <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
             {categoryFilterOptions.map((cat) => (
@@ -291,27 +310,10 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
         <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
           <FileSpreadsheet className="h-10 w-10 text-slate-300" />
           <h3 className="mt-3 font-display text-base font-semibold text-slate-900">
-            No {mode.toLowerCase()} transactions recorded yet
+            {monthCover !== 'ALL'
+              ? `No ${displayModeName.toLowerCase()} transactions for ${monthCover}${yearCover !== 'ALL' ? ` ${yearCover}` : ''}`
+              : `No ${displayModeName.toLowerCase()} transactions recorded yet`}
           </h3>
-          <p className="mt-1 max-w-md text-sm text-slate-500">
-            Encode your first invoice above using BIR RELIEF TIN recall, or import an existing CSV filing sheet.
-          </p>
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={onStartNewEntry}
-              className="rounded-lg bg-blue-700 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-800 cursor-pointer"
-            >
-              Encode First Entry
-            </button>
-            <button
-              type="button"
-              onClick={onImportCsvClick}
-              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
-            >
-              Import Filing CSV
-            </button>
-          </div>
         </div>
       ) : filteredRows.length === 0 ? (
         <div className="flex flex-col items-center justify-center px-6 py-14 text-center">
@@ -471,7 +473,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                       colSpan={19}
                       className="border border-slate-400 px-3 py-2 text-center text-sm font-bold tracking-wide"
                     >
-                      PURCHASES
+                      {displayModeName}
                     </th>
                     <th
                       colSpan={3}
@@ -709,6 +711,47 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                               <Edit3 className="h-3.5 w-3.5" />
                             </button>
 
+                            {isAdminMode && onSetAuditStatus && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => onSetAuditStatus(row.id, row.auditStatus === 'APPROVED' ? 'PENDING' : 'APPROVED')}
+                                  title={row.auditStatus === 'APPROVED' ? 'Approved (click to revert)' : 'Approve entry'}
+                                  className={`rounded p-1 cursor-pointer ${
+                                    row.auditStatus === 'APPROVED'
+                                      ? 'bg-emerald-100 text-emerald-700'
+                                      : 'text-slate-400 hover:bg-emerald-50 hover:text-emerald-700'
+                                  }`}
+                                >
+                                  <ShieldCheck className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onSetAuditStatus(row.id, row.auditStatus === 'FLAGGED' ? 'PENDING' : 'FLAGGED')}
+                                  title={row.auditStatus === 'FLAGGED' ? 'Flagged (click to unflag)' : 'Flag entry for client'}
+                                  className={`rounded p-1 cursor-pointer ${
+                                    row.auditStatus === 'FLAGGED'
+                                      ? 'bg-rose-100 text-rose-700'
+                                      : 'text-slate-400 hover:bg-rose-50 hover:text-rose-700'
+                                  }`}
+                                >
+                                  <Flag className="h-3.5 w-3.5" />
+                                </button>
+                              </>
+                            )}
+
+                            {!isAdminMode && row.auditStatus && row.auditStatus !== 'PENDING' && (
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                                  row.auditStatus === 'APPROVED'
+                                    ? 'bg-emerald-50 text-emerald-700'
+                                    : 'bg-rose-50 text-rose-700'
+                                }`}
+                              >
+                                {row.auditStatus}
+                              </span>
+                            )}
+
                             <button
                               type="button"
                               onClick={() => onDeleteRow(row.id)}
@@ -763,20 +806,20 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
               /* EXACT 20-COLUMN SALES SCHEMA (WITH TWO ADDRESS COLUMNS) */
               <table className="w-full border-collapse text-left text-xs">
                 <thead>
-                  <tr className="bg-slate-900 text-white">
-                    <th colSpan={9} className="border-r border-slate-700 px-3 py-2 text-[11px] font-semibold tracking-wide">
+                  <tr className="bg-[#0B4DA2] text-white">
+                    <th colSpan={9} className="border-r border-white/20 px-3 py-2 text-[11px] font-semibold tracking-wide">
                       SALES LEDGER RECORD
                     </th>
-                    <th colSpan={5} className="border-r border-slate-700 px-3 py-2 text-center text-[11px] font-semibold tracking-wide">
+                    <th colSpan={5} className="border-r border-white/20 px-3 py-2 text-center text-[11px] font-semibold tracking-wide">
                       VAT &amp; EXEMPT BREAKDOWN
                     </th>
-                    <th colSpan={4} className="border-r border-slate-700 bg-slate-800 px-3 py-2 text-center text-[11px] font-semibold tracking-wide">
+                    <th colSpan={4} className="border-r border-white/20 bg-[#093D82] px-3 py-2 text-center text-[11px] font-semibold tracking-wide">
                       WITHHOLDING TAX
                     </th>
-                    <th className="border-r border-slate-700 px-3 py-2 text-right text-[11px] font-semibold tracking-wide">
+                    <th className="border-r border-white/20 px-3 py-2 text-right text-[11px] font-semibold tracking-wide">
                       ACTUAL
                     </th>
-                    <th className="border-r border-slate-700 px-3 py-2 text-[11px] font-semibold tracking-wide">
+                    <th className="border-r border-white/20 px-3 py-2 text-[11px] font-semibold tracking-wide">
                       REMARKS
                     </th>
                     <th className="px-3 py-2 text-center text-[11px] font-semibold tracking-wide">
@@ -784,7 +827,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                     </th>
                   </tr>
 
-                  <tr className="bg-slate-100 text-slate-700 border-b border-slate-200">
+                  <tr className="bg-[#F4F8FD] text-slate-700 border-b border-slate-200">
                     <th className="px-2.5 py-2 font-semibold whitespace-nowrap">DATE</th>
                     <th className="px-2.5 py-2 font-semibold whitespace-nowrap">MONTH</th>
                     <th className="px-2.5 py-2 font-semibold whitespace-nowrap">BRANCH/ TRADE NAME</th>
@@ -956,6 +999,47 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                             >
                               <Edit3 className="h-3.5 w-3.5" />
                             </button>
+
+                            {isAdminMode && onSetAuditStatus && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => onSetAuditStatus(row.id, row.auditStatus === 'APPROVED' ? 'PENDING' : 'APPROVED')}
+                                  title={row.auditStatus === 'APPROVED' ? 'Approved (click to revert)' : 'Approve entry'}
+                                  className={`rounded p-1 cursor-pointer ${
+                                    row.auditStatus === 'APPROVED'
+                                      ? 'bg-emerald-100 text-emerald-700'
+                                      : 'text-slate-400 hover:bg-emerald-50 hover:text-emerald-700'
+                                  }`}
+                                >
+                                  <ShieldCheck className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onSetAuditStatus(row.id, row.auditStatus === 'FLAGGED' ? 'PENDING' : 'FLAGGED')}
+                                  title={row.auditStatus === 'FLAGGED' ? 'Flagged (click to unflag)' : 'Flag entry for client'}
+                                  className={`rounded p-1 cursor-pointer ${
+                                    row.auditStatus === 'FLAGGED'
+                                      ? 'bg-rose-100 text-rose-700'
+                                      : 'text-slate-400 hover:bg-rose-50 hover:text-rose-700'
+                                  }`}
+                                >
+                                  <Flag className="h-3.5 w-3.5" />
+                                </button>
+                              </>
+                            )}
+
+                            {!isAdminMode && row.auditStatus && row.auditStatus !== 'PENDING' && (
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                                  row.auditStatus === 'APPROVED'
+                                    ? 'bg-emerald-50 text-emerald-700'
+                                    : 'bg-rose-50 text-rose-700'
+                                }`}
+                              >
+                                {row.auditStatus}
+                              </span>
+                            )}
 
                             <button
                               type="button"

@@ -10,13 +10,20 @@ export type YesNo = 'YES' | 'NO';
 
 export type TaxStatus = 'VATABLE' | 'NON_VAT';
 
+export type AuditStatus = 'PENDING' | 'APPROVED' | 'FLAGGED';
+
+export type LedgerEntryKind = 'SALES' | 'PURCHASES' | 'EXPENSE';
+
 export interface LedgerRow {
   id: string;
   splitGroupId?: string;
+  entryKind?: LedgerEntryKind;
+  auditStatus?: AuditStatus;
+  auditNote?: string;
   date: string;
   month: string;
   branchTradeName: string;
-  payor: string; // PAYOR in Sales mode, PAYEE/SUPPLIER in Purchases mode
+  payor: string; // PAYOR in Sales mode, PAYEE/SUPPLIER in Purchases/Expense mode
   tin: string;
   address: string; // Barangay / Municipality
   address2?: string; // City / District

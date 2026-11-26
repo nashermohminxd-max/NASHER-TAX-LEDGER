@@ -10,7 +10,7 @@ import type {
   YesNo,
 } from '../types/tax';
 
-const MONTHS = [
+export const FILING_MONTHS = [
   'JANUARY',
   'FEBRUARY',
   'MARCH',
@@ -24,6 +24,25 @@ const MONTHS = [
   'NOVEMBER',
   'DECEMBER',
 ] as const;
+
+export type FilingMonth = (typeof FILING_MONTHS)[number];
+
+export const MONTH_SHORT_LABELS: Record<FilingMonth, string> = {
+  JANUARY: 'JAN',
+  FEBRUARY: 'FEB',
+  MARCH: 'MAR',
+  APRIL: 'APR',
+  MAY: 'MAY',
+  JUNE: 'JUN',
+  JULY: 'JUL',
+  AUGUST: 'AUG',
+  SEPTEMBER: 'SEP',
+  OCTOBER: 'OCT',
+  NOVEMBER: 'NOV',
+  DECEMBER: 'DEC',
+};
+
+const MONTHS = FILING_MONTHS;
 
 export function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -69,6 +88,127 @@ export function deriveMonthFromDate(dateStr: string): string {
   }
 
   return '';
+}
+
+export function extractYearFromDate(dateStr: string): string {
+  const trimmed = (dateStr || '').trim();
+  if (!trimmed) return '';
+
+  const isoMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(trimmed);
+  if (isoMatch) return isoMatch[1];
+
+  const slashMatch = /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/.exec(trimmed);
+  if (slashMatch) {
+    return slashMatch[3].length === 2 ? `20${slashMatch[3]}` : slashMatch[3];
+  }
+
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime())) {
+    return String(parsed.getFullYear());
+  }
+
+  return '';
+}
+
+export function getRowFilingMonth(row: Pick<LedgerRow, 'month' | 'date'>): string {
+  return (row.month || deriveMonthFromDate(row.date)).trim().toUpperCase();
+}
+
+export function getRowFilingYear(row: Pick<LedgerRow, 'date'>): string {
+  return extractYearFromDate(row.date);
+}
+
+export function rowMatchesPeriod(
+  row: Pick<LedgerRow, 'month' | 'date'>,
+  monthCover: string,
+  yearCover: string
+): boolean {
+  const mCover = (monthCover || 'ALL').trim().toUpperCase();
+  const yCover = (yearCover || 'ALL').trim().toUpperCase();
+
+  if (mCover !== 'ALL') {
+    const rowMonth = getRowFilingMonth(row);
+    if (rowMonth !== mCover) return false;
+  }
+
+  if (yCover !== 'ALL') {
+    const rowYear = getRowFilingYear(row);
+    if (rowYear && rowYear !== yCover) return false;
+  }
+
+  return true;
+}
+
+export function getDefaultDateForCover(monthCover: string, yearCover: string): string {
+  const now = new Date();
+  const targetYear =
+    yearCover && yearCover !== 'ALL' && /^\d{4}$/.test(yearCover)
+      ? parseInt(yearCover, 10)
+      : now.getFullYear();
+
+  const mIdx = FILING_MONTHS.indexOf(monthCover.trim().toUpperCase() as FilingMonth);
+  if (mIdx < 0) {
+    if (targetYear === now.getFullYear()) {
+      return `${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()}`;
+    }
+    return `${now.getMonth() + 1}/1/${targetYear}`;
+  }
+
+  if (mIdx === now.getMonth() && targetYear === now.getFullYear()) {
+    return `${mIdx + 1}/${now.getDate()}/${targetYear}`;
+  }
+  return `${mIdx + 1}/1/${targetYear}`;
+}
+
+export function collectAvailableYears(rows: Pick<LedgerRow, 'date'>[]): string[] {
+  const set = new Set<string>([String(new Date().getFullYear())]);
+  rows.forEach((r) => {
+    const y = extractYearFromDate(r.date);
+    if (y) set.add(y);
+  });
+  return Array.from(set).sort((a, b) => Number(b) - Number(a));
+}
+
+export function sortMonthsChronologically(months: string[]): string[] {
+  return [...months].sort((a, b) => {
+    const ia = FILING_MONTHS.indexOf(a.toUpperCase() as FilingMonth);
+    const ib = FILING_MONTHS.indexOf(b.toUpperCase() as FilingMonth);
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+}
+
+export function getLatestPeriodFromRows(rows: Pick<LedgerRow, 'month' | 'date'>[]): {
+  month: string;
+  year: string;
+} {
+  const now = new Date();
+  const fallback: { month: string; year: string } = {
+    month: FILING_MONTHS[now.getMonth()],
+    year: String(now.getFullYear()),
+  };
+  if (rows.length === 0) return fallback;
+
+  let bestScore = -1;
+  let best: { month: string; year: string } = fallback;
+
+  for (const r of rows) {
+    const m = getRowFilingMonth(r);
+    const yStr = getRowFilingYear(r);
+    const mIdx = FILING_MONTHS.indexOf(m as FilingMonth);
+    const yNum = yStr ? parseInt(yStr, 10) : now.getFullYear();
+    if (mIdx >= 0 && Number.isFinite(yNum)) {
+      const score = yNum * 12 + mIdx;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { month: m, year: String(yNum) };
+      }
+    }
+  }
+
+  return bestScore >= 0 ? best : fallback;
 }
 
 export function formatDateSlash(dateStr: string): string {

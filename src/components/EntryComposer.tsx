@@ -1,17 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Calculator,
-  CheckCircle2,
   ChevronDown,
   ListPlus,
   Plus,
-  RefreshCw,
-  Search,
   Sparkles,
-  Split,
   Trash2,
-  UserCheck,
-  UserPlus,
   X,
 } from 'lucide-react';
 import type {
@@ -21,18 +15,18 @@ import type {
   PayeeClassification,
   SplitLineDraft,
   TaxStatus,
-  TinRecord,
   TransactionCategory,
   YesNo,
 } from '../types/tax';
 import {
+  FILING_MONTHS,
   calculateRowTaxes,
   deriveMonthFromDate,
-  findTinMatch,
   formatAccounting,
   formatDateSlash,
   formatPlainInput,
   formatTin,
+  getDefaultDateForCover,
   isValidTinDigits,
   normalizeTinDigits,
   parseAmount,
@@ -45,27 +39,17 @@ import { DEFAULT_ACCOUNT_TITLES } from '../utils/clientStorage';
 interface EntryComposerProps {
   clientKey: string;
   mode: LedgerMode;
-  tinDirectory: TinRecord[];
-  existingRows: LedgerRow[];
+  modeLabel?: string;
+  coveredMonth: string;
+  coveredYear: string;
   accountTitles: string[];
   onUpdateAccountTitles: (titles: string[]) => void;
   autoCalcEnabled: boolean;
   onToggleAutoCalc: (val: boolean) => void;
   editingRow: LedgerRow | null;
   onCancelEdit: () => void;
-  onSaveRows: (rows: LedgerRow[], tinToUpsert?: TinRecord | null, replaceRowId?: string) => void;
-  onUpdateTinProfile: (record: TinRecord) => void;
+  onSaveRows: (rows: LedgerRow[], replaceRowId?: string) => void;
 }
-
-const COMMON_SUPPORTING_DOCS = [
-  'SALES INVOICE',
-  'OFFICIAL RECEIPT',
-  'SOA / BILL',
-  'BILLING STATEMENT',
-  'COLLECTION RECEIPT',
-  'DELIVERY RECEIPT',
-  'CASH VOUCHER',
-];
 
 function parseAccountTitleLines(raw: string): string[] {
   return Array.from(
@@ -136,8 +120,9 @@ function draftFromRow(row: LedgerRow): SplitLineDraft {
 export const EntryComposer: React.FC<EntryComposerProps> = ({
   clientKey,
   mode,
-  tinDirectory,
-  existingRows,
+  modeLabel,
+  coveredMonth,
+  coveredYear,
   accountTitles,
   onUpdateAccountTitles,
   autoCalcEnabled,
@@ -145,14 +130,14 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
   editingRow,
   onCancelEdit,
   onSaveRows,
-  onUpdateTinProfile,
 }) => {
   const [entryType, setEntryType] = useState<'SINGLE' | 'SPLIT'>('SINGLE');
-  const [date, setDate] = useState<string>(() => {
-    const d = new Date();
-    return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
-  });
-  const [month, setMonth] = useState<string>(() => deriveMonthFromDate(new Date().toISOString().slice(0, 10)));
+  const [date, setDate] = useState<string>(() => getDefaultDateForCover(coveredMonth, coveredYear));
+  const [month, setMonth] = useState<string>(() =>
+    coveredMonth !== 'ALL'
+      ? coveredMonth
+      : deriveMonthFromDate(toIsoDateInput(getDefaultDateForCover(coveredMonth, coveredYear))) || 'JANUARY'
+  );
   const [tin, setTin] = useState<string>('');
   const [payor, setPayor] = useState<string>('');
   const [branchTradeName, setBranchTradeName] = useState<string>('');
@@ -167,9 +152,6 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
   const [withholdingAgent, setWithholdingAgent] = useState<YesNo>('YES');
 
   const [lines, setLines] = useState<SplitLineDraft[]>([createDraftLine('GOODS', 'PRIVATE', 'VATABLE')]);
-  const [showAutocomplete, setShowAutocomplete] = useState(false);
-  const [matchedTin, setMatchedTin] = useState<{ record: TinRecord; source: 'directory' | 'history' } | null>(null);
-  const [profileUpdatedToast, setProfileUpdatedToast] = useState(false);
   const [formError, setFormError] = useState<string>('');
 
   const [openAccountDropdownKey, setOpenAccountDropdownKey] = useState<string | null>(null);
@@ -180,13 +162,20 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
 
   const tinInputRef = useRef<HTMLInputElement>(null);
   const amountInputRef = useRef<HTMLInputElement>(null);
-  const autocompleteRef = useRef<HTMLDivElement>(null);
   const accountDropdownRef = useRef<HTMLDivElement>(null);
 
   const entityLabel = mode === 'SALES' ? 'PAYOR' : 'PAYEE/SUPPLIER';
+  const displayModeLabel = modeLabel ?? (mode === 'PURCHASES' ? 'EXPENSES' : 'SALES');
 
   // Reset form drafts whenever active client directory switches
   useEffect(() => {
+    const nextDate = getDefaultDateForCover(coveredMonth, coveredYear);
+    setDate(nextDate);
+    setMonth(
+      coveredMonth !== 'ALL'
+        ? coveredMonth
+        : deriveMonthFromDate(nextDate) || 'JANUARY'
+    );
     setTin('');
     setPayor('');
     setBranchTradeName('');
@@ -194,13 +183,24 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
     setAddress2('');
     setPrivateOrGovt('PRIVATE');
     setReferenceNo('');
-    setMatchedTin(null);
-    setShowAutocomplete(false);
     setOpenAccountDropdownKey(null);
     setShowAccountListModal(false);
     setLines([createDraftLine('GOODS', 'PRIVATE', 'VATABLE')]);
     setFormError('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientKey]);
+
+  // Sync default filing date & month when active Month Cover changes (without wiping typed lines)
+  useEffect(() => {
+    if (editingRow) return;
+    const nextDate = getDefaultDateForCover(coveredMonth, coveredYear);
+    setDate(nextDate);
+    setMonth(
+      coveredMonth !== 'ALL'
+        ? coveredMonth
+        : deriveMonthFromDate(nextDate) || 'JANUARY'
+    );
+  }, [coveredMonth, coveredYear, editingRow]);
 
   // Populate when editing an existing row
   useEffect(() => {
@@ -219,11 +219,9 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
       setReferenceNo(editingRow.referenceNo ?? '');
       setWithholdingAgent(editingRow.withholdingAgent ?? 'YES');
       setLines([draftFromRow(editingRow)]);
-      const match = findTinMatch(editingRow.tin, tinDirectory, existingRows);
-      setMatchedTin(match.record && match.source ? { record: match.record, source: match.source } : null);
       setFormError('');
     }
-  }, [editingRow, tinDirectory, existingRows]);
+  }, [editingRow]);
 
   // Recompute lines when switching SALES <-> PURCHASES
   useEffect(() => {
@@ -241,9 +239,6 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (autocompleteRef.current && !autocompleteRef.current.contains(e.target as Node)) {
-        setShowAutocomplete(false);
-      }
       if (accountDropdownRef.current && !accountDropdownRef.current.contains(e.target as Node)) {
         setOpenAccountDropdownKey(null);
       }
@@ -294,91 +289,9 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
     };
   };
 
-  const applyTinMatch = (record: TinRecord, source: 'directory' | 'history') => {
-    setTin(record.tin);
-    setPayor(record.payor);
-    setBranchTradeName(record.branchTradeName);
-    setAddress(record.address);
-    setAddress2(record.address2 ?? '');
-    setPrivateOrGovt(record.defaultPrivateOrGovt);
-
-    const nextClass = record.defaultPayeeClassification ?? payeeClassification;
-    const nextAgent = record.defaultWithholdingAgent ?? withholdingAgent;
-    if (record.defaultPayeeClassification) setPayeeClassification(record.defaultPayeeClassification);
-    if (record.defaultWithholdingAgent) setWithholdingAgent(record.defaultWithholdingAgent);
-
-    setMatchedTin({ record, source });
-    setShowAutocomplete(false);
-
-    setLines((prev) =>
-      prev.map((ln, idx) => {
-        const nextCat =
-          idx === 0
-            ? mode === 'SALES' && record.defaultCategory === 'N/A'
-              ? 'GOODS'
-              : record.defaultCategory
-            : ln.category;
-        const nextTax = idx === 0 ? record.defaultTaxStatus : ln.taxStatus;
-        const nextAcct = ln.accountTitle || record.defaultAccountTitle || '';
-
-        if (ln.rawAmount.trim() !== '') {
-          return recomputeDraftLine(
-            {
-              ...ln,
-              accountTitle: nextAcct,
-              applyGovtVat5: record.defaultPrivateOrGovt === 'GOVT',
-            },
-            record.defaultPrivateOrGovt,
-            nextAgent
-          );
-        }
-
-        return recomputeDraftLine(
-          {
-            ...ln,
-            category: nextCat,
-            taxStatus: nextTax,
-            accountTitle: nextAcct,
-            applyGovtVat5: record.defaultPrivateOrGovt === 'GOVT',
-          },
-          record.defaultPrivateOrGovt,
-          nextAgent
-        );
-      })
-    );
-    void nextClass;
-  };
-
   const handleTinChange = (rawVal: string) => {
-    const formatted = formatTin(rawVal);
-    setTin(formatted);
-    setShowAutocomplete(true);
-
-    const match = findTinMatch(formatted, tinDirectory, existingRows);
-    if (match.record && match.source) {
-      applyTinMatch(match.record, match.source);
-    } else {
-      setMatchedTin(null);
-    }
+    setTin(formatTin(rawVal));
   };
-
-  const autocompleteMatches = useMemo(() => {
-    const qDigits = normalizeTinDigits(tin);
-    const qText = (payor || tin).trim().toLowerCase();
-    const combined = [...tinDirectory];
-
-    if (!qDigits && !qText) return combined.slice(0, 6);
-
-    return combined
-      .filter((item) => {
-        if (qDigits && item.digits.includes(qDigits)) return true;
-        if (qText && (item.payor.toLowerCase().includes(qText) || item.branchTradeName.toLowerCase().includes(qText))) {
-          return true;
-        }
-        return false;
-      })
-      .slice(0, 7);
-  }, [tin, payor, tinDirectory]);
 
   const updateLine = (key: string, patch: Partial<SplitLineDraft>, forceRecalc = false) => {
     setLines((prev) =>
@@ -451,50 +364,14 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
     setLines((prev) => prev.filter((l) => l.key !== key));
   };
 
-  const hasProfileDiff = useMemo(() => {
-    if (!matchedTin) return false;
-    const rec = matchedTin.record;
-    return (
-      rec.payor.trim() !== payor.trim() ||
-      rec.branchTradeName.trim() !== branchTradeName.trim() ||
-      rec.address.trim() !== address.trim() ||
-      (rec.address2 ?? '').trim() !== address2.trim() ||
-      (mode === 'SALES' && rec.defaultPrivateOrGovt !== privateOrGovt) ||
-      (mode === 'PURCHASES' &&
-        ((rec.defaultPayeeClassification ?? 'N/A') !== payeeClassification ||
-          (rec.defaultWithholdingAgent ?? 'YES') !== withholdingAgent))
-    );
-  }, [matchedTin, payor, branchTradeName, address, address2, mode, privateOrGovt, payeeClassification, withholdingAgent]);
-
-  const handleUpdateMasterProfileClick = () => {
-    const digits = normalizeTinDigits(tin);
-    if (!digits) return;
-    const now = new Date().toISOString();
-    const firstLine = lines[0];
-    const updated: TinRecord = {
-      id: matchedTin?.record.id ?? `tin-${digits}`,
-      tin: formatTin(digits),
-      digits,
-      payor: payor.trim().toUpperCase(),
-      branchTradeName: branchTradeName.trim().toUpperCase(),
-      address: address.trim().toUpperCase(),
-      address2: address2.trim().toUpperCase(),
-      defaultPrivateOrGovt: privateOrGovt,
-      defaultCategory: firstLine?.category ?? 'GOODS',
-      defaultTaxStatus: firstLine?.taxStatus ?? 'VATABLE',
-      defaultPayeeClassification: mode === 'PURCHASES' ? payeeClassification : matchedTin?.record.defaultPayeeClassification,
-      defaultAccountTitle: mode === 'PURCHASES' ? firstLine?.accountTitle.trim().toUpperCase() : matchedTin?.record.defaultAccountTitle,
-      defaultWithholdingAgent: mode === 'PURCHASES' ? withholdingAgent : matchedTin?.record.defaultWithholdingAgent,
-      createdAt: matchedTin?.record.createdAt ?? now,
-      updatedAt: now,
-    };
-    onUpdateTinProfile(updated);
-    setMatchedTin({ record: updated, source: 'directory' });
-    setProfileUpdatedToast(true);
-    setTimeout(() => setProfileUpdatedToast(false), 2500);
-  };
-
   const resetFormAfterSave = () => {
+    const nextDate = getDefaultDateForCover(coveredMonth, coveredYear);
+    setDate(nextDate);
+    setMonth(
+      coveredMonth !== 'ALL'
+        ? coveredMonth
+        : deriveMonthFromDate(nextDate) || 'JANUARY'
+    );
     setTin('');
     setPayor('');
     setBranchTradeName('');
@@ -502,7 +379,6 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
     setAddress2('');
     setPrivateOrGovt('PRIVATE');
     setReferenceNo('');
-    setMatchedTin(null);
     setLines([createDraftLine('GOODS', 'PRIVATE', 'VATABLE')]);
     setFormError('');
     tinInputRef.current?.focus();
@@ -537,7 +413,6 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
     const now = new Date().toISOString();
     const splitGroupId = validLines.length > 1 ? `split-${Date.now()}` : undefined;
     const formattedTin = formatTin(tin);
-    const digits = normalizeTinDigits(tin);
 
     const newRows: LedgerRow[] = validLines.map((ln, idx) => {
       const actualParsed = parseAmount(ln.rawActual);
@@ -577,27 +452,6 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
       };
     });
 
-    let tinToSave: TinRecord | null = null;
-    if (digits.length > 0 && !matchedTin && payor.trim()) {
-      tinToSave = {
-        id: `tin-${digits}`,
-        tin: formattedTin,
-        digits,
-        payor: payor.trim().toUpperCase(),
-        branchTradeName: branchTradeName.trim().toUpperCase(),
-        address: address.trim().toUpperCase(),
-        address2: address2.trim().toUpperCase(),
-        defaultPrivateOrGovt: privateOrGovt,
-        defaultCategory: validLines[0].category,
-        defaultTaxStatus: validLines[0].taxStatus,
-        defaultPayeeClassification: mode === 'PURCHASES' ? payeeClassification : undefined,
-        defaultAccountTitle: mode === 'PURCHASES' ? validLines[0].accountTitle.trim().toUpperCase() : undefined,
-        defaultWithholdingAgent: mode === 'PURCHASES' ? withholdingAgent : undefined,
-        createdAt: now,
-        updatedAt: now,
-      };
-    }
-
     if (mode === 'PURCHASES') {
       validLines.forEach((ln) => {
         const acct = ln.accountTitle.trim().toUpperCase();
@@ -605,7 +459,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
       });
     }
 
-    onSaveRows(newRows, tinToSave, editingRow?.id);
+    onSaveRows(newRows, editingRow?.id);
     if (editingRow) {
       onCancelEdit();
     } else {
@@ -620,57 +474,16 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
       : ['GOODS', 'SERVICES', 'RENTAL'];
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white">
+    <section className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
       {/* Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/70 px-5 py-3.5">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="font-display text-sm font-semibold text-slate-900">
-            {editingRow ? `Edit ${mode} Entry` : `Encode ${mode} Transaction`}
+            {editingRow ? `Edit ${displayModeLabel} Entry` : `Encode ${displayModeLabel} Transaction`}
           </h2>
-          {!editingRow && (
-            <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setEntryType('SINGLE');
-                  setLines((prev) => [prev[0] || createDraftLine('GOODS', privateOrGovt, 'VATABLE')]);
-                }}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  entryType === 'SINGLE'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Single-Line Quick Entry
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setEntryType('SPLIT');
-                  if (lines.length === 1) {
-                    setLines((prev) => [
-                      prev[0],
-                      createDraftLine(
-                        prev[0].category === 'SERVICES' ? 'RENTAL' : 'SERVICES',
-                        privateOrGovt,
-                        'VATABLE',
-                        prev[0].accountTitle,
-                        prev[0].particular
-                      ),
-                    ]);
-                  }
-                }}
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  entryType === 'SPLIT'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Split className="h-3.5 w-3.5" />
-                Multi-Line Split Invoice
-              </button>
-            </div>
-          )}
+          <span className="rounded-lg bg-[#E7F0FC] px-2.5 py-0.5 text-[11px] font-semibold text-[#0B4DA2]">
+            Cover: {coveredMonth === 'ALL' ? (coveredYear === 'ALL' ? 'ALL MONTHS' : `ALL MONTHS ${coveredYear}`) : coveredYear === 'ALL' ? coveredMonth : `${coveredMonth} ${coveredYear}`}
+          </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-4">
@@ -707,7 +520,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="p-5 space-y-5">
+      <form onSubmit={handleSubmit} autoComplete="off" className="p-5 space-y-5">
         {/* Shared Transaction Header */}
         <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-12">
           {/* Date */}
@@ -718,6 +531,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
             <div className="flex gap-1">
               <input
                 type="text"
+                autoComplete="off"
                 value={date}
                 onChange={(e) => {
                   const val = e.target.value;
@@ -725,7 +539,6 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                   const derived = deriveMonthFromDate(val);
                   if (derived) setMonth(derived);
                 }}
-                placeholder="9/2/2026"
                 className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
               />
               <input
@@ -746,21 +559,36 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
 
           {/* Month */}
           <div className="lg:col-span-2">
-            <label className="block text-xs font-medium text-slate-600 mb-1">MONTH</label>
-            <input
-              type="text"
+            <div className="flex items-center justify-between gap-1 mb-1">
+              <label className="block text-xs font-medium text-slate-600">MONTH</label>
+              {coveredMonth !== 'ALL' && month && month !== coveredMonth && (
+                <span className="text-[10px] font-semibold text-amber-700">
+                  Outside cover
+                </span>
+              )}
+            </div>
+            <select
               value={month}
               onChange={(e) => setMonth(e.target.value.toUpperCase())}
-              placeholder="SEPTEMBER"
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
-            />
+              aria-label="Filing month"
+              className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm font-medium text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+            >
+              {!FILING_MONTHS.includes(month as (typeof FILING_MONTHS)[number]) && month && (
+                <option value={month}>{month}</option>
+              )}
+              {FILING_MONTHS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
           </div>
 
-          {/* TIN with RELIEF Auto-Recall & Autocomplete */}
-          <div className="lg:col-span-3 relative" ref={autocompleteRef}>
+          {/* TIN */}
+          <div className="lg:col-span-3">
             <div className="flex items-center justify-between mb-1">
               <label className="block text-xs font-medium text-slate-600">
-                TIN (RELIEF Recall)
+                TIN
               </label>
               {tinDigits.length > 0 && !isValidTinDigits(tinDigits) && (
                 <span className="text-[11px] font-medium text-amber-700">
@@ -768,53 +596,16 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                 </span>
               )}
             </div>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <div>
               <input
                 ref={tinInputRef}
                 type="text"
+                autoComplete="off"
                 value={tin}
-                onFocus={() => setShowAutocomplete(true)}
                 onChange={(e) => handleTinChange(e.target.value)}
-                placeholder="000-168-231-000"
-                className="w-full rounded-lg border border-slate-300 bg-white pl-8 pr-3 py-2 text-sm tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
               />
             </div>
-
-            {showAutocomplete && autocompleteMatches.length > 0 && (
-              <div className="absolute left-0 right-0 z-30 mt-1 max-h-60 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-                <div className="border-b border-slate-100 px-3 py-1.5 text-[11px] font-medium text-slate-500">
-                  TIN Master Directory Matches
-                </div>
-                {autocompleteMatches.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => applyTinMatch(item, 'directory')}
-                    className="flex w-full flex-col items-start gap-0.5 border-b border-slate-100 px-3 py-2 text-left last:border-b-0 hover:bg-blue-50/70 cursor-pointer"
-                  >
-                    <div className="flex w-full items-center justify-between gap-2">
-                      <span className="tabular-nums-mono text-xs font-semibold text-blue-700">
-                        {item.tin}
-                      </span>
-                      <span className="text-[11px] font-medium text-slate-500">
-                        {mode === 'PURCHASES'
-                          ? `${item.defaultPayeeClassification ?? 'N/A'} · WHT ${item.defaultWithholdingAgent ?? 'YES'}`
-                          : `${item.defaultPrivateOrGovt} · ${item.defaultCategory}`}
-                      </span>
-                    </div>
-                    <span className="truncate w-full text-xs font-medium text-slate-900">
-                      {item.payor}
-                    </span>
-                    {item.branchTradeName && (
-                      <span className="truncate w-full text-[11px] text-slate-500">
-                        {item.branchTradeName} · {[item.address, item.address2].filter(Boolean).join(', ')}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* PAYOR / PAYEE/SUPPLIER */}
@@ -824,9 +615,9 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
             </label>
             <input
               type="text"
+              autoComplete="off"
               value={payor}
               onChange={(e) => setPayor(e.target.value)}
-              placeholder={mode === 'SALES' ? 'PLGU ZAMBOANGA SIBUGAY' : 'PETRON CORPORATION'}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
             />
           </div>
@@ -880,9 +671,9 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
             </label>
             <input
               type="text"
+              autoComplete="off"
               value={branchTradeName}
               onChange={(e) => setBranchTradeName(e.target.value)}
-              placeholder={mode === 'SALES' ? 'G POWER' : 'PETRON IPIL STATION'}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
             />
           </div>
@@ -894,9 +685,9 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
             </label>
             <input
               type="text"
+              autoComplete="off"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="CAPITOL COMPOUND, IPIL"
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
             />
           </div>
@@ -908,9 +699,9 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
             </label>
             <input
               type="text"
+              autoComplete="off"
               value={address2}
               onChange={(e) => setAddress2(e.target.value)}
-              placeholder="ZAMBOANGA SIBUGAY"
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
             />
           </div>
@@ -924,17 +715,11 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                 </label>
                 <input
                   type="text"
-                  list="supporting-docs-list"
+                  autoComplete="off"
                   value={supportingDocs}
                   onChange={(e) => setSupportingDocs(e.target.value)}
-                  placeholder="SALES INVOICE"
                   className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none"
                 />
-                <datalist id="supporting-docs-list">
-                  {COMMON_SUPPORTING_DOCS.map((doc) => (
-                    <option key={doc} value={doc} />
-                  ))}
-                </datalist>
               </div>
 
               <div className="lg:col-span-1">
@@ -943,9 +728,9 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                 </label>
                 <input
                   type="text"
+                  autoComplete="off"
                   value={referenceNo}
                   onChange={(e) => setReferenceNo(e.target.value)}
-                  placeholder="SI-88412"
                   className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none"
                 />
               </div>
@@ -976,50 +761,6 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
             </>
           )}
         </div>
-
-        {/* BIR RELIEF Status Strip */}
-        {(matchedTin || tinDigits.length > 0 || profileUpdatedToast) && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs">
-            {matchedTin ? (
-              <div className="flex flex-wrap items-center gap-2 text-emerald-800">
-                <UserCheck className="h-4 w-4 text-emerald-600 shrink-0" />
-                <span className="font-semibold">Returning TIN — Auto-Filled</span>
-                <span className="text-slate-400" aria-hidden="true">·</span>
-                <span className="text-slate-600">
-                  Loaded from {matchedTin.source === 'directory' ? 'TIN Master Directory' : 'prior ledger records'}
-                </span>
-              </div>
-            ) : (
-              <div className="flex flex-wrap items-center gap-2 text-blue-800">
-                <UserPlus className="h-4 w-4 text-blue-600 shrink-0" />
-                <span className="font-semibold">New TIN — Will Save Automatically</span>
-                <span className="text-slate-400" aria-hidden="true">·</span>
-                <span className="text-slate-600">
-                  Profile will be indexed in TIN Master Directory on save
-                </span>
-              </div>
-            )}
-
-            <div className="flex items-center gap-2">
-              {profileUpdatedToast && (
-                <span className="inline-flex items-center gap-1 font-medium text-emerald-700">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  Master profile updated
-                </span>
-              )}
-              {matchedTin && hasProfileDiff && (
-                <button
-                  type="button"
-                  onClick={handleUpdateMasterProfileClick}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 cursor-pointer"
-                >
-                  <RefreshCw className="h-3 w-3" />
-                  Update Master Profile
-                </button>
-              )}
-            </div>
-          </div>
-        )}
 
         {/* Line Items */}
         <div className="space-y-3">
@@ -1177,9 +918,9 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                         </label>
                         <input
                           type="text"
+                          autoComplete="off"
                           value={ln.particular}
                           onChange={(e) => updateLine(ln.key, { particular: e.target.value })}
-                          placeholder="DIESEL FUEL FOR DELIVERY TRUCK"
                           className="w-full rounded-lg border border-amber-300 bg-amber-50/40 px-3 py-1.5 text-xs text-slate-900 uppercase focus:border-blue-600 focus:bg-white focus:outline-none"
                         />
                       </div>
@@ -1527,14 +1268,14 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
             )}
             <button
               type="submit"
-              className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-800 whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#18181B] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Sparkles className="h-3.5 w-3.5" />
               {editingRow
                 ? 'Save Changes'
                 : entryType === 'SPLIT'
-                ? `Add ${lines.length} Split Rows to ${mode}`
-                : `Add to ${mode} Ledger`}
+                ? `Add ${lines.length} Split Rows to ${displayModeLabel}`
+                : `Add to ${displayModeLabel} Ledger`}
             </button>
           </div>
         </div>
