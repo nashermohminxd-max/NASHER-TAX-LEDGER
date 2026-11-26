@@ -41,7 +41,7 @@ export function neutralizeSpreadsheetFormula(val: string): string {
   return s;
 }
 
-export function parseCsvMatrix(csvText: string): string[][] {
+function parseCsvMatrix(csvText: string): string[][] {
   if (csvText.length > MAX_CSV_CHARS) {
     throw new Error('CSV file exceeds the maximum 10 MB size limit.');
   }
@@ -555,100 +555,6 @@ export function exportFilingCsv(mode: LedgerMode, rows: LedgerRow[]): string {
   ]);
 
   return '\uFEFF' + [header1, header2, header3, ...dataLines].map((line) => line.map(escapeCsvCell).join(',')).join('\r\n');
-}
-
-export function exportTinDirectoryCsv(records: TinRecord[]): string {
-  const header = [
-    'TIN',
-    'PAYOR / SUPPLIER',
-    'BRANCH / TRADE NAME',
-    'ADDRESS 1 (BARANGAY / MUNICIPALITY)',
-    'ADDRESS 2 (CITY / DISTRICT)',
-    'DEFAULT PRIVATE OR GOVT',
-    'DEFAULT CATEGORY',
-    'DEFAULT TAX STATUS',
-    'DEFAULT CLASSIFICATION',
-    'DEFAULT ACCOUNT TITLE',
-    'DEFAULT WITHHOLDING AGENT',
-  ];
-  const lines = records.map((t) => [
-    t.tin,
-    t.payor,
-    t.branchTradeName,
-    t.address,
-    t.address2 ?? '',
-    t.defaultPrivateOrGovt,
-    t.defaultCategory,
-    t.defaultTaxStatus,
-    t.defaultPayeeClassification ?? 'N/A',
-    t.defaultAccountTitle ?? '',
-    t.defaultWithholdingAgent ?? 'YES',
-  ]);
-  return '\uFEFF' + [header, ...lines].map((l) => l.map(escapeCsvCell).join(',')).join('\r\n');
-}
-
-export function importTinDirectoryCsv(csvText: string): TinRecord[] {
-  const matrix = parseCsvMatrix(csvText);
-  if (matrix.length < 2) return [];
-  const hdr = matrix[0].map(normalizeHeader);
-  const idxTin = hdr.findIndex((h) => h.includes('TIN'));
-  const idxPayor = hdr.findIndex((h) => h.includes('PAYOR') || h.includes('SUPPLIER') || h.includes('NAME'));
-  const idxBranch = hdr.findIndex((h) => h.includes('BRANCH') || h.includes('TRADE'));
-  const idxAddr = hdr.findIndex((h) => h.includes('ADDRESS 1') || h === 'ADDRESS' || h.includes('BRGY') || h.includes('MUNICIPALITY'));
-  const idxAddr2 = hdr.findIndex((h, idx) => idx !== idxAddr && (h.includes('ADDRESS 2') || h.includes('CITY') || h.includes('DISTRICT')));
-  const idxPriv = hdr.findIndex((h) => h.includes('PRIVATE') || h.includes('GOVT'));
-  const idxCat = hdr.findIndex((h) => h.includes('CATEGORY') || h.includes('GOODS'));
-  const idxTax = hdr.findIndex((h) => h.includes('TAX') || h.includes('VAT'));
-  const idxClass = hdr.findIndex((h) => h.includes('CLASSIFICATION'));
-  const idxAcct = hdr.findIndex((h) => h.includes('ACCOUNT'));
-  const idxAgent = hdr.findIndex((h) => h.includes('AGENT'));
-
-  const now = new Date().toISOString();
-  const out: TinRecord[] = [];
-  for (let i = 1; i < matrix.length; i++) {
-    const row = matrix[i];
-    if (!row || row.every((c) => !c)) continue;
-    const rawTin = stripControlChars(row[idxTin >= 0 ? idxTin : 0] || '');
-    const digits = normalizeTinDigits(rawTin);
-    const payor = stripControlChars(row[idxPayor >= 0 ? idxPayor : 1] || '');
-    if (!digits && !payor) continue;
-
-    const privRaw = normalizeHeader(row[idxPriv >= 0 ? idxPriv : 5] || '');
-    const catRaw = normalizeHeader(row[idxCat >= 0 ? idxCat : 6] || '');
-    const taxRaw = normalizeHeader(row[idxTax >= 0 ? idxTax : 7] || '');
-    const classRaw = idxClass >= 0 ? normalizeHeader(row[idxClass] || '') : '';
-    const agentRaw = idxAgent >= 0 ? normalizeHeader(row[idxAgent] || '') : '';
-
-    out.push({
-      id: `tin-${digits || Date.now()}-${i}`,
-      tin: formatTin(digits),
-      digits,
-      payor,
-      branchTradeName: stripControlChars(row[idxBranch >= 0 ? idxBranch : 2] || ''),
-      address: stripControlChars(row[idxAddr >= 0 ? idxAddr : 3] || ''),
-      address2: idxAddr2 >= 0 ? stripControlChars(row[idxAddr2] || '') : '',
-      defaultPrivateOrGovt: privRaw === 'GOVT' ? 'GOVT' : 'PRIVATE',
-      defaultCategory:
-        catRaw === 'N/A'
-          ? 'N/A'
-          : catRaw === 'SERVICES'
-          ? 'SERVICES'
-          : catRaw === 'RENTAL'
-          ? 'RENTAL'
-          : 'GOODS',
-      defaultTaxStatus: taxRaw.includes('NON') ? 'NON_VAT' : 'VATABLE',
-      defaultPayeeClassification: classRaw.includes('IND')
-        ? 'INDIVIDUAL'
-        : classRaw.includes('CORP')
-        ? 'CORP'
-        : 'N/A',
-      defaultAccountTitle: idxAcct >= 0 ? stripControlChars(row[idxAcct] || '').toUpperCase() : '',
-      defaultWithholdingAgent: agentRaw === 'NO' ? 'NO' : 'YES',
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
-  return out;
 }
 
 export function triggerFileDownload(filename: string, content: string, mimeType = 'text/csv;charset=utf-8;') {

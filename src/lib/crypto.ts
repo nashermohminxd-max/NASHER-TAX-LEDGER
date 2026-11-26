@@ -56,13 +56,3 @@ export async function verifyPassword(password: string, storedHash: string, store
   }
   return diff === 0;
 }
-
-export function generateTempPassword(length = 14): string {
-  const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
-  const values = crypto.getRandomValues(new Uint8Array(length));
-  let out = '';
-  for (let i = 0; i < length; i++) {
-    out += charset[values[i] % charset.length];
-  }
-  return out;
-}

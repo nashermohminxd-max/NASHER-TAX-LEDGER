@@ -266,12 +266,12 @@ export const AdminDashboardPage: React.FC = () => {
       <aside className="w-full lg:w-64 lg:shrink-0 bg-white/75 backdrop-blur-2xl text-slate-800 border-b lg:border-b-0 lg:border-r border-white/90 flex flex-col">
         <div className="px-5 py-4 border-b border-slate-200/70">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200/80 bg-white p-1 shadow-2xs">
+            <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-slate-200/80 bg-white shadow-2xs">
               <img
-                src="/assets/aistudio/image_e6df563a.png"
+                src="/assets/aistudio/image_1a4227c8.png"
                 alt="NPB CPA"
                 referrerPolicy="no-referrer"
-                className="h-full w-full object-contain"
+                className="absolute left-1/2 top-1/2 h-auto w-[113%] max-w-none -translate-x-[51.7%] -translate-y-[53%]"
               />
             </div>
             <div className="min-w-0 flex-1 flex flex-col justify-center text-center">
@@ -651,8 +651,15 @@ export const AdminDashboardPage: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={async () => {
-                                    const blob = await downloadVaultXlsxBlob(file);
-                                    triggerBlobDownload(blob, file.fileName);
+                                    try {
+                                      const blob = await downloadVaultXlsxBlob(file);
+                                      triggerBlobDownload(blob, file.fileName);
+                                    } catch (err) {
+                                      showToast(
+                                        err instanceof Error ? err.message : 'Unable to download workbook.',
+                                        'error'
+                                      );
+                                    }
                                   }}
                                   className="inline-flex items-center justify-center rounded-xl bg-[#18181B] px-3 py-1.5 text-[11px] font-semibold leading-normal text-white hover:bg-slate-800 cursor-pointer"
                                 >

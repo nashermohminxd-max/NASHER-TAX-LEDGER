@@ -6,21 +6,6 @@ export function stripControlChars(value: string): string {
   return (value || '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
 }
 
-export function stripDangerousKeysDeep<T>(input: T): T {
-  if (Array.isArray(input)) {
-    return input.map((item) => stripDangerousKeysDeep(item)) as unknown as T;
-  }
-  if (input !== null && typeof input === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
-      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
-      out[k] = stripDangerousKeysDeep(v);
-    }
-    return out as T;
-  }
-  return input;
-}
-
 const safeString = (maxLen = 500) =>
   z
     .string()
@@ -34,15 +19,6 @@ export const loginCredentialsSchema = z.object({
     .string()
     .min(1, 'Password is required.')
     .max(256, 'Password exceeds maximum length.'),
-});
-
-export const adminBootstrapSchema = z.object({
-  email: safeString(160).refine((s) => s.length >= 2, 'Username must be at least 2 characters.'),
-  password: z
-    .string()
-    .min(8, 'Password must be at least 8 characters.')
-    .max(256, 'Password exceeds maximum length.'),
-  fullName: safeString(160),
 });
 
 export const changePasswordSchema = z.object({
@@ -116,42 +92,6 @@ export const ledgerRowSchema = z.object({
   manualOverride: z.boolean(),
   createdAt: safeString(64),
   updatedAt: safeString(64),
-});
-
-export const tinRecordSchema = z.object({
-  id: safeString(128),
-  tin: safeString(32),
-  digits: safeString(16),
-  payor: safeString(250),
-  branchTradeName: safeString(200),
-  address: safeString(300),
-  address2: safeString(300).optional(),
-  defaultPrivateOrGovt: z.enum(['PRIVATE', 'GOVT']),
-  defaultCategory: z.enum(['N/A', 'GOODS', 'SERVICES', 'RENTAL']),
-  defaultTaxStatus: z.enum(['VATABLE', 'NON_VAT']),
-  defaultPayeeClassification: z.enum(['N/A', 'INDIVIDUAL', 'CORP']).optional(),
-  defaultAccountTitle: safeString(150).optional(),
-  defaultWithholdingAgent: z.enum(['YES', 'NO']).optional(),
-  createdAt: safeString(64),
-  updatedAt: safeString(64),
-});
-
-export const clientWorkspaceBackupSchema = z.object({
-  version: z.number().int().min(1).max(10),
-  exportedAt: safeString(64),
-  client: z.object({
-    id: safeString(128),
-    slug: safeString(128),
-    name: safeString(200),
-    tin: safeString(32).optional(),
-    rdo: safeString(24).optional(),
-    createdAt: safeString(64),
-    updatedAt: safeString(64),
-  }),
-  salesRows: z.array(ledgerRowSchema).max(25000),
-  purchasesRows: z.array(ledgerRowSchema).max(25000),
-  tinDirectory: z.array(tinRecordSchema).max(10000).default([]),
-  accountTitles: z.array(safeString(150)).max(500).default([]),
 });
 
 export const vaultMetadataInputSchema = z.object({

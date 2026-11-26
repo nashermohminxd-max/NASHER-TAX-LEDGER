@@ -37,28 +37,6 @@ export function sanitizeFilename(fileName: string): string {
   return cleaned || 'workbook.xlsx';
 }
 
-export function isValidSpreadsheetFile(file: File): boolean {
-  const lower = file.name.toLowerCase();
-  return lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.xlsm');
-}
-
-/**
- * Generates the isolated per-client path required by Supabase Storage RLS policies:
- * {client_directory_id}/{tax_year}/{period}/{filename}.xlsx
- */
-export function buildVaultStoragePath(
-  clientDirectoryId: string,
-  taxYear: string,
-  taxPeriod: string,
-  fileName: string
-): string {
-  const safeClient = sanitizeSegment(clientDirectoryId, 'unassigned');
-  const safeYear = sanitizeSegment(taxYear, String(new Date().getFullYear()));
-  const safePeriod = sanitizeSegment(taxPeriod, 'GENERAL');
-  const safeFile = sanitizeFilename(fileName);
-  const stamp = Date.now().toString(36);
-  return `${safeClient}/${safeYear}/${safePeriod}/${stamp}_${safeFile}`;
-}
 
 function openBlobDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -74,7 +52,7 @@ function openBlobDb(): Promise<IDBDatabase> {
   });
 }
 
-export async function saveLocalVaultBlob(storagePath: string, blob: Blob): Promise<void> {
+async function saveLocalVaultBlob(storagePath: string, blob: Blob): Promise<void> {
   const db = await openBlobDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
@@ -84,7 +62,7 @@ export async function saveLocalVaultBlob(storagePath: string, blob: Blob): Promi
   });
 }
 
-export async function loadLocalVaultBlob(storagePath: string): Promise<Blob | null> {
+async function loadLocalVaultBlob(storagePath: string): Promise<Blob | null> {
   const db = await openBlobDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readonly');
@@ -94,7 +72,7 @@ export async function loadLocalVaultBlob(storagePath: string): Promise<Blob | nu
   });
 }
 
-export async function deleteLocalVaultBlob(storagePath: string): Promise<void> {
+async function deleteLocalVaultBlob(storagePath: string): Promise<void> {
   try {
     const db = await openBlobDb();
     await new Promise<void>((resolve, reject) => {

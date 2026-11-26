@@ -8,7 +8,6 @@ import {
 } from '../data/seedData';
 import type {
   ClientProfile,
-  ClientWorkspaceBackup,
   LedgerRow,
   TinRecord,
 } from '../types/tax';
@@ -61,15 +60,6 @@ export function slugifyClientName(name: string): string {
   return base || 'client';
 }
 
-export function makeUniqueClientSlug(name: string, existing: ClientProfile[], excludeId?: string): string {
-  const base = slugifyClientName(name);
-  const used = new Set(existing.filter((c) => c.id !== excludeId).map((c) => c.slug));
-  if (!used.has(base)) return base;
-  let i = 2;
-  while (used.has(`${base}-${i}`)) i++;
-  return `${base}-${i}`;
-}
-
 export function safeLoadJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -88,22 +78,18 @@ export function safeSaveJson(key: string, value: unknown): void {
   }
 }
 
-export interface ClientDirectoryStats {
-  salesCount: number;
-  purchasesCount: number;
-  tinCount: number;
-}
-
-export function getClientDirectoryStats(clientId: string): ClientDirectoryStats {
-  const keys = getClientStorageKeys(clientId);
-  const sales = safeLoadJson<LedgerRow[]>(keys.SALES, []);
-  const purchases = safeLoadJson<LedgerRow[]>(keys.PURCHASES, []);
-  const tins = safeLoadJson<TinRecord[]>(keys.TINS, []);
-  return {
-    salesCount: Array.isArray(sales) ? sales.length : 0,
-    purchasesCount: Array.isArray(purchases) ? purchases.length : 0,
-    tinCount: Array.isArray(tins) ? tins.length : 0,
-  };
+function resolveClientSlugFromUrl(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get('client');
+    if (q) return q.trim().toLowerCase();
+    const match = window.location.pathname.match(/^\/client\/([^/]+)/i);
+    if (match?.[1]) return decodeURIComponent(match[1]).trim().toLowerCase();
+  } catch {
+    // ignore
+  }
+  return '';
 }
 
 export function initializeClientRegistry(): {
@@ -210,44 +196,6 @@ export function deleteClientWorkspaceStorage(clientId: string): void {
     localStorage.removeItem(keys.ACCOUNT_TITLES);
     localStorage.removeItem(keys.MONTH_COVER);
     localStorage.removeItem(keys.YEAR_COVER);
-  } catch {
-    // ignore
-  }
-}
-
-export function buildClientWorkspaceBackup(client: ClientProfile): ClientWorkspaceBackup {
-  const { salesRows, purchasesRows, tinDirectory, accountTitles } = loadClientWorkspace(client.id);
-  return {
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    client,
-    salesRows,
-    purchasesRows,
-    tinDirectory,
-    accountTitles,
-  };
-}
-
-export function resolveClientSlugFromUrl(): string {
-  if (typeof window === 'undefined') return '';
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const q = params.get('client');
-    if (q) return q.trim().toLowerCase();
-    const match = window.location.pathname.match(/^\/client\/([^/]+)/i);
-    if (match?.[1]) return decodeURIComponent(match[1]).trim().toLowerCase();
-  } catch {
-    // ignore
-  }
-  return '';
-}
-
-export function syncClientSlugToUrl(slug: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set('client', slug);
-    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
   } catch {
     // ignore
   }

@@ -2,8 +2,6 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import {
   authenticatePreviewUser,
   fetchUserProfileById,
-  hasAnyAdminAccount,
-  registerFirstPreviewAdmin,
   setActiveSessionUser,
 } from '@/lib/portalStore';
 import {
@@ -19,14 +17,8 @@ import type { UserProfile } from '@/types/portal';
 interface AuthContextValue {
   user: UserProfile | null;
   loading: boolean;
-  needsFirstRunAdminSetup: boolean;
   isSupabaseMode: boolean;
   signIn: (email: string, password: string) => Promise<UserProfile>;
-  setupFirstPreviewAdmin: (params: {
-    email: string;
-    password: string;
-    fullName: string;
-  }) => Promise<UserProfile>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -38,7 +30,6 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [needsFirstRunAdminSetup, setNeedsFirstRunAdminSetup] = useState<boolean>(false);
 
   const hydrateFromSupabase = useCallback(async (userId: string, fallbackEmail?: string, meta?: Record<string, unknown>) => {
     const profile = await fetchUserProfileById(userId);
@@ -67,7 +58,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     async function init() {
       if (!isSupabaseConfigured || !supabase) {
-        const hasAdmin = await hasAnyAdminAccount();
         let restoredUser: UserProfile | null = null;
         try {
           // Migrate off persistent localStorage if an older session exists
@@ -91,7 +81,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         if (mounted) {
           if (restoredUser) setUser(restoredUser);
-          setNeedsFirstRunAdminSetup(!hasAdmin);
           setLoading(false);
         }
         return;
@@ -154,7 +143,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         setActiveSessionUser(profile);
         setUser(profile);
-        setNeedsFirstRunAdminSetup(false);
         return profile;
       }
 
@@ -189,23 +177,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [hydrateFromSupabase]
   );
 
-  const setupFirstPreviewAdmin = useCallback(
-    async (params: { email: string; password: string; fullName: string }): Promise<UserProfile> => {
-      const admin = await registerFirstPreviewAdmin(params);
-      try {
-        sessionStorage.setItem(PREVIEW_SESSION_KEY, admin.id);
-        localStorage.removeItem(PREVIEW_SESSION_KEY);
-      } catch {
-        // ignore storage errors
-      }
-      setActiveSessionUser(admin);
-      setUser(admin);
-      setNeedsFirstRunAdminSetup(false);
-      return admin;
-    },
-    []
-  );
-
   const signOut = useCallback(async () => {
     setActiveSessionUser(null);
     if (isSupabaseConfigured && supabase) {
@@ -219,8 +190,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
     setUser(null);
-    const hasAdmin = await hasAnyAdminAccount();
-    setNeedsFirstRunAdminSetup(!hasAdmin);
   }, []);
 
   const refreshProfile = useCallback(async () => {
@@ -237,10 +206,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         loading,
-        needsFirstRunAdminSetup,
         isSupabaseMode: isSupabaseConfigured,
         signIn,
-        setupFirstPreviewAdmin,
         signOut,
         refreshProfile,
       }}

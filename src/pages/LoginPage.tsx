@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
-  CheckCircle2,
   Eye,
   EyeOff,
   Loader2,
@@ -18,7 +17,7 @@ const resetEmailSchema = z.string().trim().email('Please enter a valid email add
 const REMEMBER_EMAIL_KEY = 'npb_tax_ledger_remember_email_v1';
 
 export const LoginPage: React.FC = () => {
-  const { signIn, setupFirstPreviewAdmin, needsFirstRunAdminSetup } = useAuth();
+  const { signIn } = useAuth();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState<string>(() => {
@@ -36,7 +35,6 @@ export const LoginPage: React.FC = () => {
     }
   });
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -69,9 +67,7 @@ export const LoginPage: React.FC = () => {
         }
       }
 
-      const profile = needsFirstRunAdminSetup
-        ? await setupFirstPreviewAdmin({ email, password, fullName })
-        : await signIn(email, password);
+      const profile = await signIn(email, password);
 
       if (profile.role === 'admin') {
         navigate('/admin', { replace: true });
@@ -184,12 +180,10 @@ export const LoginPage: React.FC = () => {
 
           <div className="mt-4 text-center">
             <h1 className="font-display text-2xl font-bold tracking-tight leading-snug text-slate-900">
-              {needsFirstRunAdminSetup ? 'Create admin account' : 'Welcome back'}
+              Welcome back
             </h1>
             <p className="mt-1 text-xs font-medium leading-normal text-slate-600">
-              {needsFirstRunAdminSetup
-                ? 'Set up your NPB Tax Ledger administrator credentials.'
-                : 'Please enter your details to sign in.'}
+              Please enter your details to sign in.
             </p>
             <p className="mt-2 text-[11px] font-semibold leading-normal text-[#0B4DA2]">
               Noverben P. Bachiller, CPA · Tax & Accounting Services
@@ -199,19 +193,10 @@ export const LoginPage: React.FC = () => {
           <div className="my-5 flex items-center gap-3">
             <div className="h-px flex-1 bg-slate-300/80" />
             <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-              {needsFirstRunAdminSetup ? 'First-Run Setup' : 'NPB Portal'}
+              NPB Portal
             </span>
             <div className="h-px flex-1 bg-slate-300/80" />
           </div>
-
-          {needsFirstRunAdminSetup && (
-            <div className="mb-4 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50/90 px-3.5 py-2.5 text-xs text-emerald-900">
-              <CheckCircle2 className="h-4 w-4 text-emerald-700 mt-0.5 shrink-0" />
-              <span>
-                Create your master Admin password below to manage client directories and `.xlsx` vaults.
-              </span>
-            </div>
-          )}
 
           {error && (
             <div className="mb-4 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50/95 px-3.5 py-2.5 text-xs font-medium text-rose-800">
@@ -221,21 +206,6 @@ export const LoginPage: React.FC = () => {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {needsFirstRunAdminSetup && (
-              <div>
-                <label className="block text-xs font-semibold text-slate-800">
-                  Administrator Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  placeholder="Noverben P. Bachiller, CPA"
-                  className="mt-1.5 w-full rounded-xl border border-slate-400/50 bg-white/55 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#0B4DA2] focus:bg-white/90 focus:outline-none transition-colors"
-                />
-              </div>
-            )}
 
             <div>
               <label className="block text-xs font-semibold leading-normal text-slate-800">
@@ -260,11 +230,11 @@ export const LoginPage: React.FC = () => {
                 <input
                   type={showPassword ? 'text' : 'password'}
                   required
-                  minLength={needsFirstRunAdminSetup ? 8 : 1}
-                  autoComplete={needsFirstRunAdminSetup ? 'new-password' : 'current-password'}
+                  minLength={1}
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={needsFirstRunAdminSetup ? 'Minimum 8 characters...' : 'Enter your password...'}
+                  placeholder="Enter your password..."
                   className="w-full rounded-xl border border-slate-400/50 bg-white/55 py-2.5 pl-3.5 pr-10 text-sm leading-normal text-slate-900 placeholder:text-slate-400 focus:border-[#0B4DA2] focus:bg-white/90 focus:outline-none transition-colors"
                 />
                 <button
@@ -278,31 +248,29 @@ export const LoginPage: React.FC = () => {
               </div>
             </div>
 
-            {!needsFirstRunAdminSetup && (
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-xs leading-normal">
-                <label className="inline-flex items-center gap-2 font-medium text-slate-800 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="h-4 w-4 rounded border-slate-400 text-slate-900 focus:ring-slate-900 cursor-pointer"
-                  />
-                  <span>Remember me</span>
-                </label>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-xs leading-normal">
+              <label className="inline-flex items-center gap-2 font-medium text-slate-800 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-400 text-slate-900 focus:ring-slate-900 cursor-pointer"
+                />
+                <span>Remember me</span>
+              </label>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setResetEmail(email);
-                    setResetNotice('');
-                    setInfoModal('FORGOT');
-                  }}
-                  className="inline-flex items-center font-medium text-slate-800 underline underline-offset-2 hover:text-[#0B4DA2] whitespace-nowrap cursor-pointer"
-                >
-                  Forgot password?
-                </button>
-              </div>
-            )}
+              <button
+                type="button"
+                onClick={() => {
+                  setResetEmail(email);
+                  setResetNotice('');
+                  setInfoModal('FORGOT');
+                }}
+                className="inline-flex items-center font-medium text-slate-800 underline underline-offset-2 hover:text-[#0B4DA2] whitespace-nowrap cursor-pointer"
+              >
+                Forgot password?
+              </button>
+            </div>
 
             <button
               type="submit"
@@ -310,11 +278,7 @@ export const LoginPage: React.FC = () => {
               className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl bg-[#18181B] px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:opacity-60 cursor-pointer"
             >
               {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-              {submitting
-                ? 'Signing in...'
-                : needsFirstRunAdminSetup
-                ? 'Create Admin & Sign in'
-                : 'Sign in'}
+              {submitting ? 'Signing in...' : 'Sign in'}
             </button>
           </form>
         </div>

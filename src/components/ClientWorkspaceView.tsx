@@ -449,31 +449,39 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
   };
 
   const handleFixMathRow = async (row: LedgerRow) => {
-    const fixed = recalculateExistingRow(row, taxMode);
-    await upsertSingleLedgerRows({
-      clientId: client.id,
-      entryKind: ledgerTab,
-      rows: [fixed],
-      userId: user?.id,
-    });
-    const nextRows = setActiveTabRows((prev) => prev.map((r) => (r.id === row.id ? fixed : r)));
-    await syncPeriodsToAdminVault(ledgerTab, nextRows, [fixed]);
-    showToast('Recalculated VAT & Withholding Taxes and updated Admin Storage.');
+    try {
+      const fixed = recalculateExistingRow(row, taxMode);
+      await upsertSingleLedgerRows({
+        clientId: client.id,
+        entryKind: ledgerTab,
+        rows: [fixed],
+        userId: user?.id,
+      });
+      const nextRows = setActiveTabRows((prev) => prev.map((r) => (r.id === row.id ? fixed : r)));
+      await syncPeriodsToAdminVault(ledgerTab, nextRows, [fixed]);
+      showToast('Recalculated VAT & Withholding Taxes and updated Admin Storage.');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to recalculate entry.', 'error');
+    }
   };
 
   const handleComputeActualRow = async (row: LedgerRow) => {
     const expected = getRowExpectedActual(row, taxMode);
     if (expected === null) return;
-    const updated: LedgerRow = { ...row, actual: expected, updatedAt: new Date().toISOString() };
-    await upsertSingleLedgerRows({
-      clientId: client.id,
-      entryKind: ledgerTab,
-      rows: [updated],
-      userId: user?.id,
-    });
-    const nextRows = setActiveTabRows((prev) => prev.map((r) => (r.id === row.id ? updated : r)));
-    await syncPeriodsToAdminVault(ledgerTab, nextRows, [updated]);
-    showToast(`Set ACTUAL to ₱${formatAccounting(expected)} & updated Admin Storage.`);
+    try {
+      const updated: LedgerRow = { ...row, actual: expected, updatedAt: new Date().toISOString() };
+      await upsertSingleLedgerRows({
+        clientId: client.id,
+        entryKind: ledgerTab,
+        rows: [updated],
+        userId: user?.id,
+      });
+      const nextRows = setActiveTabRows((prev) => prev.map((r) => (r.id === row.id ? updated : r)));
+      await syncPeriodsToAdminVault(ledgerTab, nextRows, [updated]);
+      showToast(`Set ACTUAL to ₱${formatAccounting(expected)} & updated Admin Storage.`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to update ACTUAL amount.', 'error');
+    }
   };
 
   const handleSetAuditStatus = async (rowId: string, status: AuditStatus) => {
@@ -577,25 +585,30 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
   };
 
   const handleConfirmModalAction = async () => {
-    if (confirmAction === 'CLEAR_LEDGER') {
-      const toRemove = allModeRows.filter((r) => rowMatchesPeriod(r, monthCover, yearCover));
-      await clearLedgerRowsPeriodRemote(
-        client.id,
-        ledgerTab,
-        toRemove.map((r) => r.id)
-      );
-      const nextRows = setActiveTabRows((prev) =>
-        prev.filter((r) => !rowMatchesPeriod(r, monthCover, yearCover))
-      );
-      setEditingRow(null);
-      await syncPeriodsToAdminVault(ledgerTab, nextRows, toRemove);
-      showToast(
-        `Cleared ${toRemove.length} ${
-          ledgerTab === 'EXPENSE' ? 'EXPENSES' : 'SALES'
-        } rows for ${monthCover} & updated Admin Storage.`
-      );
+    try {
+      if (confirmAction === 'CLEAR_LEDGER') {
+        const toRemove = allModeRows.filter((r) => rowMatchesPeriod(r, monthCover, yearCover));
+        await clearLedgerRowsPeriodRemote(
+          client.id,
+          ledgerTab,
+          toRemove.map((r) => r.id)
+        );
+        const nextRows = setActiveTabRows((prev) =>
+          prev.filter((r) => !rowMatchesPeriod(r, monthCover, yearCover))
+        );
+        setEditingRow(null);
+        await syncPeriodsToAdminVault(ledgerTab, nextRows, toRemove);
+        showToast(
+          `Cleared ${toRemove.length} ${
+            ledgerTab === 'EXPENSE' ? 'EXPENSES' : 'SALES'
+          } rows for ${monthCover} & updated Admin Storage.`
+        );
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to clear period rows.', 'error');
+    } finally {
+      setConfirmAction(null);
     }
-    setConfirmAction(null);
   };
 
   const navItems: { id: WorkspaceSection; label: string; icon: React.ReactNode; badge?: string | number }[] = [

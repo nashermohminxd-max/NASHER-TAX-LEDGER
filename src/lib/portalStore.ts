@@ -1,11 +1,4 @@
-import {
-  SEED_PURCHASES_ROWS,
-  SEED_SALES_ROWS,
-  SEED_TIN_DIRECTORY,
-  upgradePurchasesRows,
-  upgradeSalesRows,
-  upgradeTinRecords,
-} from '@/data/seedData';
+import { upgradePurchasesRows } from '@/data/seedData';
 import { hashPassword, verifyPassword } from '@/lib/crypto';
 import {
   AUTH_RATE_LIMIT,
@@ -16,13 +9,11 @@ import {
 } from '@/lib/rateLimit';
 import { createEphemeralSignUpClient, isSupabaseConfigured, supabase } from '@/lib/supabase';
 import {
-  adminBootstrapSchema,
   assignCredentialsSchema,
   changePasswordSchema,
   clientDirectoryInputSchema,
   ledgerRowSchema,
   stripControlChars,
-  tinRecordSchema,
   vaultMetadataInputSchema,
 } from '@/lib/validation';
 import {
@@ -366,8 +357,30 @@ function ensurePreviewDirectoriesBootstrapped(): {
   return { clients, metaMap };
 }
 
+const DEFAULT_PREVIEW_ADMIN_USERNAME = 'staff.npbservices';
+const DEFAULT_PREVIEW_ADMIN_SALT = 'h2GHtYMLJSuMEWZqGdhdUw==';
+const DEFAULT_PREVIEW_ADMIN_HASH = 'PJ99zkiGT4SNGM4EYX9JcqBTYccCkhv0oYyKZpEiW7w=';
+
 function loadPreviewUsers(): StoredPreviewUser[] {
-  return safeLoadJson<StoredPreviewUser[]>(PORTAL_KEYS.USERS, []);
+  const users = safeLoadJson<StoredPreviewUser[]>(PORTAL_KEYS.USERS, []);
+  if (!users.some((u) => u.role === 'admin')) {
+    const now = new Date().toISOString();
+    const defaultAdmin: StoredPreviewUser = {
+      id: 'admin-staff-npbservices',
+      email: DEFAULT_PREVIEW_ADMIN_USERNAME,
+      fullName: 'Noverben P. Bachiller, CPA',
+      role: 'admin',
+      clientDirectoryId: null,
+      passwordHash: DEFAULT_PREVIEW_ADMIN_HASH,
+      passwordSalt: DEFAULT_PREVIEW_ADMIN_SALT,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const next = [defaultAdmin, ...users];
+    safeSaveJson(PORTAL_KEYS.USERS, next);
+    return next;
+  }
+  return users;
 }
 
 function savePreviewUsers(users: StoredPreviewUser[]): void {
@@ -432,58 +445,6 @@ async function requireDirectoryAccess(clientDirectoryId: string): Promise<UserPr
 // ----------------------------------------------------------------------------
 // Auth & User Profile Operations
 // ----------------------------------------------------------------------------
-
-export async function hasAnyAdminAccount(): Promise<boolean> {
-  if (isSupabaseConfigured && supabase) {
-    return true; // Supabase project admins sign in directly
-  }
-  const users = loadPreviewUsers();
-  return users.some((u) => u.role === 'admin');
-}
-
-export async function registerFirstPreviewAdmin(params: {
-  email: string;
-  password: string;
-  fullName: string;
-}): Promise<UserProfile> {
-  if (isSupabaseConfigured) {
-    throw new Error('First-run local setup is disabled when connected to Supabase.');
-  }
-  const parsed = adminBootstrapSchema.safeParse(params);
-  if (!parsed.success) {
-    throw new Error(parsed.error.issues[0]?.message || 'Invalid administrator setup details.');
-  }
-  const users = loadPreviewUsers();
-  if (users.some((u) => u.role === 'admin')) {
-    throw new Error('An administrator account already exists. Please sign in.');
-  }
-  const cleanEmail = parsed.data.email.toLowerCase();
-  const { hash, salt } = await hashPassword(parsed.data.password);
-  const now = new Date().toISOString();
-  const created: StoredPreviewUser = {
-    id: toUuidLikeId(),
-    email: cleanEmail,
-    fullName: parsed.data.fullName || 'Lead Tax Administrator',
-    role: 'admin',
-    clientDirectoryId: null,
-    passwordHash: hash,
-    passwordSalt: salt,
-    createdAt: now,
-    updatedAt: now,
-  };
-  savePreviewUsers([created, ...users]);
-  const profile: UserProfile = {
-    id: created.id,
-    email: created.email,
-    fullName: created.fullName,
-    role: created.role,
-    clientDirectoryId: created.clientDirectoryId,
-    createdAt: created.createdAt,
-    updatedAt: created.updatedAt,
-  };
-  activeSessionUser = profile;
-  return profile;
-}
 
 export async function authenticatePreviewUser(
   identifier: string,
@@ -612,29 +573,6 @@ export async function fetchUserProfileById(userId: string): Promise<UserProfile 
 
   if (error || !data) return null;
   return mapUserProfileFromDb(data as Record<string, unknown>);
-}
-
-export async function listClientUsers(): Promise<UserProfile[]> {
-  await requireAdminUser();
-  if (!isSupabaseConfigured || !supabase) {
-    return loadPreviewUsers().map((u) => ({
-      id: u.id,
-      email: u.email,
-      fullName: u.fullName,
-      role: u.role,
-      clientDirectoryId: u.clientDirectoryId,
-      createdAt: u.createdAt,
-      updatedAt: u.updatedAt,
-    }));
-  }
-
-  const { data, error } = await supabase
-    .from('user_profiles')
-    .select('*')
-    .order('created_at', { ascending: false });
-
-  if (error || !data) return [];
-  return (data as Record<string, unknown>[]).map(mapUserProfileFromDb);
 }
 
 // ----------------------------------------------------------------------------
@@ -903,9 +841,7 @@ export async function assignClientLoginCredentials(params: {
     const users = loadPreviewUsers();
     const now = new Date().toISOString();
     const existingIdx = users.findIndex(
-      (u) =>
-        u.clientDirectoryId === params.clientDirectoryId ||
-        u.email.toLowerCase() === cleanUsername
+      (u) => u.role === 'client' && u.clientDirectoryId === params.clientDirectoryId
     );
     const conflict = users.find(
       (u, idx) => idx !== existingIdx && u.email.toLowerCase() === cleanUsername
@@ -1227,93 +1163,6 @@ export async function updateLedgerAuditStatus(
   if (error) throw new Error(error.message);
 }
 
-export async function saveClientTinDirectory(
-  clientId: string,
-  records: TinRecord[]
-): Promise<void> {
-  await requireDirectoryAccess(clientId);
-  const validated = records.map((r) => {
-    const res = tinRecordSchema.safeParse(r);
-    if (!res.success) {
-      throw new Error(res.error.issues[0]?.message || 'Invalid TIN directory record.');
-    }
-    return res.data as TinRecord;
-  });
-  if (!isSupabaseConfigured || !supabase) {
-    const keys = getClientStorageKeys(clientId);
-    safeSaveJson(keys.TINS, validated);
-    return;
-  }
-
-  if (validated.length === 0) return;
-  const payload = validated
-    .filter((r) => Boolean(r.digits))
-    .map((r) => ({
-      client_directory_id: clientId,
-      tin: r.tin,
-      digits: r.digits,
-      payor: r.payor,
-      branch_trade_name: r.branchTradeName,
-      address: r.address,
-      address2: r.address2 ?? '',
-      default_private_or_govt: r.defaultPrivateOrGovt,
-      default_category: r.defaultCategory,
-      default_tax_status: r.defaultTaxStatus,
-      default_payee_classification: r.defaultPayeeClassification ?? 'CORP',
-      default_account_title: r.defaultAccountTitle ?? '',
-      default_withholding_agent: r.defaultWithholdingAgent ?? 'YES',
-    }));
-
-  if (payload.length === 0) return;
-  const { error } = await supabase
-    .from('tin_directory')
-    .upsert(payload, { onConflict: 'client_directory_id,digits' });
-  if (error) throw new Error(error.message);
-}
-
-export async function deleteClientTinRecordRemote(clientId: string, record: TinRecord): Promise<void> {
-  await requireDirectoryAccess(clientId);
-  if (!isSupabaseConfigured || !supabase) return;
-  const { error } = await supabase
-    .from('tin_directory')
-    .delete()
-    .eq('client_directory_id', clientId)
-    .eq('digits', record.digits);
-  if (error) throw new Error(error.message);
-}
-
-export async function seedSampleRowsForClient(clientId: string): Promise<{
-  salesRows: LedgerRow[];
-  purchasesRows: LedgerRow[];
-  tinDirectory: TinRecord[];
-}> {
-  await requireDirectoryAccess(clientId);
-  const salesRows = SEED_SALES_ROWS.map((r) => ({
-    ...r,
-    id: toUuidLikeId(),
-    entryKind: 'SALES' as const,
-  }));
-  const purchasesRows = SEED_PURCHASES_ROWS.map((r) => ({
-    ...r,
-    id: toUuidLikeId(),
-    entryKind: 'PURCHASES' as const,
-  }));
-  const tinDirectory = SEED_TIN_DIRECTORY;
-
-  if (!isSupabaseConfigured || !supabase) {
-    const keys = getClientStorageKeys(clientId);
-    safeSaveJson(keys.SALES, salesRows);
-    safeSaveJson(keys.PURCHASES, purchasesRows);
-    safeSaveJson(keys.TINS, tinDirectory);
-    return { salesRows, purchasesRows, tinDirectory };
-  }
-
-  await upsertSingleLedgerRows({ clientId, entryKind: 'SALES', rows: salesRows });
-  await upsertSingleLedgerRows({ clientId, entryKind: 'PURCHASES', rows: purchasesRows });
-  await saveClientTinDirectory(clientId, tinDirectory);
-  return { salesRows, purchasesRows, tinDirectory };
-}
-
 // ----------------------------------------------------------------------------
 // Large .XLSX Storage Vault Metadata Operations
 // ----------------------------------------------------------------------------
@@ -1349,7 +1198,7 @@ export async function listVaultFiles(clientDirectoryId?: string): Promise<VaultX
   return (data ?? []).map((row) => mapVaultFileFromDb(row as Record<string, unknown>));
 }
 
-export async function createVaultFileMetadata(
+async function createVaultFileMetadata(
   input: Omit<VaultXlsxFile, 'id' | 'createdAt' | 'updatedAt'>
 ): Promise<VaultXlsxFile> {
   await requireDirectoryAccess(input.clientDirectoryId);
@@ -1403,7 +1252,7 @@ export async function createVaultFileMetadata(
   return mapVaultFileFromDb(data as Record<string, unknown>);
 }
 
-export async function deleteVaultFileRecord(file: VaultXlsxFile): Promise<void> {
+async function deleteVaultFileRecord(file: VaultXlsxFile): Promise<void> {
   const sessionUser = await requireDirectoryAccess(file.clientDirectoryId);
   const isAutoManaged = file.storagePath.includes('/auto_');
   if (sessionUser.role !== 'admin' && !isAutoManaged) {

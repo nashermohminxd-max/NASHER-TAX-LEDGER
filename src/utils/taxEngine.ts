@@ -5,7 +5,6 @@ import type {
   LedgerRow,
   LedgerTotals,
   TaxStatus,
-  TinRecord,
   TransactionCategory,
   YesNo,
 } from '../types/tax';
@@ -609,50 +608,6 @@ export function computeLedgerTotals(rows: LedgerRow[], mode: LedgerMode = 'SALES
     actual: roundedActual,
     variance: round2(roundedExpected - roundedActual),
   };
-}
-
-export function findTinMatch(
-  rawTin: string,
-  directory: TinRecord[],
-  fallbackRows: LedgerRow[] = []
-): { record: TinRecord | null; source: 'directory' | 'history' | null } {
-  const digits = normalizeTinDigits(rawTin);
-  if (digits.length < 9) return { record: null, source: null };
-
-  const exactDir = directory.find((t) => t.digits === digits);
-  if (exactDir) return { record: exactDir, source: 'directory' };
-
-  const base9 = digits.slice(0, 9);
-  const branchMatch = directory.find((t) => t.digits.slice(0, 9) === base9);
-  if (branchMatch && (digits.length === 9 || digits === `${base9}000` || branchMatch.digits === base9)) {
-    return { record: branchMatch, source: 'directory' };
-  }
-
-  const histRow = fallbackRows.find((r) => normalizeTinDigits(r.tin) === digits && r.payor.trim() !== '');
-  if (histRow) {
-    return {
-      source: 'history',
-      record: {
-        id: `hist-${digits}`,
-        tin: formatTin(digits),
-        digits,
-        payor: histRow.payor,
-        branchTradeName: histRow.branchTradeName,
-        address: histRow.address,
-        address2: histRow.address2 ?? '',
-        defaultPrivateOrGovt: histRow.privateOrGovt,
-        defaultCategory: histRow.category,
-        defaultTaxStatus: (histRow.grossOfVat ?? 0) > 0 ? 'VATABLE' : 'NON_VAT',
-        defaultPayeeClassification: histRow.payeeClassification,
-        defaultAccountTitle: histRow.accountTitle,
-        defaultWithholdingAgent: histRow.withholdingAgent,
-        createdAt: histRow.createdAt,
-        updatedAt: histRow.updatedAt,
-      },
-    };
-  }
-
-  return { record: null, source: null };
 }
 
 export function nextCategoryCycle(
