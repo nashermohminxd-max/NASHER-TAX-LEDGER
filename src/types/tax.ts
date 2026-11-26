@@ -115,8 +115,14 @@ export interface SplitLineDraft {
   key: string;
   category: TransactionCategory;
   taxStatus: TaxStatus;
+  rawRealAmount?: string;
   rawNonVat: string;
   rawAmount: string;
+  rawNetOfVat?: string;
+  rawVat?: string;
+  rawTotal?: string;
+  rawEwt?: string;
+  rawWtVat5?: string;
   applyGovtVat5: boolean;
   manualOverride: boolean;
   particular: string;

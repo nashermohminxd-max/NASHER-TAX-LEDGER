@@ -242,11 +242,125 @@ export function toIsoDateInput(dateStr: string): string {
   return '';
 }
 
+export function isFormulaExpression(raw: string): boolean {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('=')) return true;
+  const cleaned = trimmed.replace(/,/g, '').replace(/₱/g, '').replace(/\s+/g, '');
+  if (/[+*/()]/.test(cleaned)) return true;
+  return /.+-/.test(cleaned);
+}
+
+export function evaluateFormulaExpression(raw: string): number | null {
+  let expr = (raw || '').trim();
+  if (!expr) return null;
+  if (expr.startsWith('=')) expr = expr.slice(1);
+  expr = expr.replace(/,/g, '').replace(/₱/g, '').replace(/\s+/g, '');
+  if (!expr) return null;
+
+  type Token = { type: 'num'; value: number } | { type: 'op'; value: string };
+  const tokens: Token[] = [];
+  let i = 0;
+  while (i < expr.length) {
+    const ch = expr[i];
+    if ((ch >= '0' && ch <= '9') || ch === '.') {
+      let numStr = '';
+      let dotCount = 0;
+      while (i < expr.length && ((expr[i] >= '0' && expr[i] <= '9') || expr[i] === '.')) {
+        if (expr[i] === '.') dotCount += 1;
+        if (dotCount > 1) return null;
+        numStr += expr[i];
+        i += 1;
+      }
+      if (numStr === '.') return null;
+      const numVal = Number(numStr);
+      if (!Number.isFinite(numVal)) return null;
+      tokens.push({ type: 'num', value: numVal });
+      continue;
+    }
+    if (ch === '+' || ch === '-' || ch === '*' || ch === '/' || ch === '(' || ch === ')') {
+      tokens.push({ type: 'op', value: ch });
+      i += 1;
+      continue;
+    }
+    return null;
+  }
+
+  let pos = 0;
+  const peek = (): Token | undefined => tokens[pos];
+  const consume = (): Token => tokens[pos++];
+
+  const parseExpr = (): number | null => {
+    let left = parseTerm();
+    if (left === null) return null;
+    while (peek()?.type === 'op' && (peek()?.value === '+' || peek()?.value === '-')) {
+      const op = consume().value;
+      const right = parseTerm();
+      if (right === null) return null;
+      left = op === '+' ? left + right : left - right;
+    }
+    return left;
+  };
+
+  const parseTerm = (): number | null => {
+    let left = parseFactor();
+    if (left === null) return null;
+    while (peek()?.type === 'op' && (peek()?.value === '*' || peek()?.value === '/')) {
+      const op = consume().value;
+      const right = parseFactor();
+      if (right === null) return null;
+      if (op === '/') {
+        if (right === 0) return null;
+        left = left / right;
+      } else {
+        left = left * right;
+      }
+    }
+    return left;
+  };
+
+  const parseFactor = (): number | null => {
+    const tok = peek();
+    if (!tok) return null;
+    if (tok.type === 'op' && (tok.value === '+' || tok.value === '-')) {
+      consume();
+      const inner = parseFactor();
+      if (inner === null) return null;
+      return tok.value === '-' ? -inner : inner;
+    }
+    if (tok.type === 'op' && tok.value === '(') {
+      consume();
+      const inner = parseExpr();
+      if (inner === null) return null;
+      const close = peek();
+      if (!close || close.type !== 'op' || close.value !== ')') return null;
+      consume();
+      return inner;
+    }
+    if (tok.type === 'num') {
+      consume();
+      return tok.value;
+    }
+    return null;
+  };
+
+  const result = parseExpr();
+  if (result === null || pos !== tokens.length || !Number.isFinite(result)) {
+    return null;
+  }
+  return round2(result);
+}
+
 export function parseAmount(raw: string | number | null | undefined): number | null {
   if (raw === null || raw === undefined) return null;
   if (typeof raw === 'number') {
     if (!Number.isFinite(raw) || raw === 0) return null;
     return round2(raw);
+  }
+  if (isFormulaExpression(raw)) {
+    const evaluated = evaluateFormulaExpression(raw);
+    if (evaluated === null || evaluated === 0) return null;
+    return evaluated;
   }
   const cleaned = raw.replace(/,/g, '').replace(/₱/g, '').trim();
   if (!cleaned || cleaned === '-') return null;
@@ -406,7 +520,11 @@ export function getRowTotalWithholding(
 
 export function getRowExpectedActual(row: LedgerRow, mode: LedgerMode = 'SALES'): number | null {
   if (row.total === null) return null;
-  return round2(row.total - getRowTotalWithholding(row, mode));
+  const baseTotal =
+    mode === 'PURCHASES' && row.manualOverride && (row.nonVatExempt !== null || row.grossOfVat !== null)
+      ? round2((row.nonVatExempt ?? 0) + (row.grossOfVat ?? 0))
+      : row.total;
+  return round2(baseTotal - getRowTotalWithholding(row, mode));
 }
 
 export function recalculateExistingRow(row: LedgerRow, mode: LedgerMode = 'SALES'): LedgerRow {
@@ -525,7 +643,12 @@ export function auditRow(row: LedgerRow, mode: LedgerMode = 'SALES'): AuditIssue
     }
   }
   const expectedTotalAmount = round2((row.nonVatExempt ?? 0) + (row.grossOfVat ?? 0));
-  if (expectedTotalAmount > 0 && row.total !== null && Math.abs(row.total - expectedTotalAmount) > 0.05) {
+  const expectedExVatTotal = round2((row.nonVatExempt ?? 0) + (row.netOfVat ?? 0));
+  const matchesTotal =
+    row.total !== null &&
+    (Math.abs(row.total - expectedTotalAmount) <= 0.05 ||
+      (mode === 'PURCHASES' && row.manualOverride && Math.abs(row.total - expectedExVatTotal) <= 0.05));
+  if (expectedTotalAmount > 0 && row.total !== null && !matchesTotal) {
     issues.push({
       code: 'MATH_TOTAL_MISMATCH',
       severity: 'warning',

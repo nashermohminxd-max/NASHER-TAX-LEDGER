@@ -15,7 +15,11 @@ import {
 import { AnalyticsDashboard } from '@/components/AnalyticsDashboard';
 import { ChangePasswordModal } from '@/components/ChangePasswordModal';
 import { EntryComposer } from '@/components/EntryComposer';
-import { ExportMonthModal, type ExportFormat } from '@/components/ExportMonthModal';
+import {
+  ExportMonthModal,
+  type ExportFormat,
+  type ExportLedgerScope,
+} from '@/components/ExportMonthModal';
 import { LedgerTable } from '@/components/LedgerTable';
 import { MonthCoverBar } from '@/components/MonthCoverBar';
 import { PWAInstallButton } from '@/components/PWAInstallButton';
@@ -26,7 +30,7 @@ import {
   listVaultFiles,
   loadClientLedgerBundle,
   saveClientLedgerRows,
-  syncLedgerPeriodToAdminVault,
+  syncConsolidatedPeriodToAdminVault,
   updateLedgerAuditStatus,
   upsertSingleLedgerRows,
 } from '@/lib/portalStore';
@@ -54,6 +58,7 @@ import {
   rowMatchesPeriod,
 } from '@/utils/taxEngine';
 import {
+  buildConsolidatedFilingXlsxBlob,
   buildFilingXlsxBlob,
   copyFilingTableForGoogleSheets,
   downloadXlsxBlob,
@@ -150,17 +155,26 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
       const task = vaultSyncChainRef.current
         .catch(() => undefined)
         .then(async () => {
+          const allSales =
+            targetKind === 'SALES' ? nextAllRowsForKind : salesRowsRef.current;
+          const allPurchases =
+            targetKind === 'EXPENSE' ? nextAllRowsForKind : expenseRowsRef.current;
+
           for (const { month, year } of periods) {
-            const rowsForPeriod = nextAllRowsForKind.filter((r) => {
+            const salesForPeriod = allSales.filter((r) => {
               const p = resolveRowPeriod(r, fallbackMonthOverride, fallbackYearOverride);
               return p.month === month && p.year === year;
             });
-            await syncLedgerPeriodToAdminVault({
+            const purchasesForPeriod = allPurchases.filter((r) => {
+              const p = resolveRowPeriod(r, fallbackMonthOverride, fallbackYearOverride);
+              return p.month === month && p.year === year;
+            });
+            await syncConsolidatedPeriodToAdminVault({
               client,
-              entryKind: targetKind,
               month,
               year,
-              rowsForPeriod,
+              salesRowsForPeriod: salesForPeriod,
+              purchasesRowsForPeriod: purchasesForPeriod,
               userId: user?.id,
               userEmail: user?.email,
             });
@@ -195,26 +209,30 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
         setEditingRow(null);
         setNeedsReviewOnly(false);
 
-        // Ensure any previously recorded Sales/Expenses periods missing an auto-saved workbook sync to Admin Storage
+        // Ensure any previously recorded Sales/Expenses periods missing a consolidated 2-sheet workbook sync to Admin Storage
         if (bundle.salesRows.length > 0 || bundle.expenseRows.length > 0) {
           void listVaultFiles(client.id)
             .then(async (existingFiles) => {
               if (!active) return;
-              const hasAutoFile = (kind: LedgerEntryKind, month: string, year: string) => {
-                const scope = kind === 'SALES' ? 'SALES' : 'EXPENSE';
+              const hasConsolidatedAutoFile = (month: string, year: string) => {
                 const taxPeriod = `${month}-${year}`;
                 return existingFiles.some(
                   (f) =>
                     f.storagePath.includes('/auto_') &&
-                    f.entryScope === scope &&
+                    f.entryScope === 'SLP' &&
                     f.taxPeriod === taxPeriod
                 );
               };
 
               const missingSales = bundle.salesRows.filter((r) => {
                 const p = resolveRowPeriod(r, bundle.monthCover, bundle.yearCover);
-                return !hasAutoFile('SALES', p.month, p.year);
+                return !hasConsolidatedAutoFile(p.month, p.year);
               });
+              const missingExpenses = bundle.expenseRows.filter((r) => {
+                const p = resolveRowPeriod(r, bundle.monthCover, bundle.yearCover);
+                return !hasConsolidatedAutoFile(p.month, p.year);
+              });
+
               if (missingSales.length > 0) {
                 await syncPeriodsRef.current(
                   'SALES',
@@ -223,13 +241,7 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                   bundle.monthCover,
                   bundle.yearCover
                 );
-              }
-
-              const missingExpenses = bundle.expenseRows.filter((r) => {
-                const p = resolveRowPeriod(r, bundle.monthCover, bundle.yearCover);
-                return !hasAutoFile('EXPENSE', p.month, p.year);
-              });
-              if (missingExpenses.length > 0) {
+              } else if (missingExpenses.length > 0) {
                 await syncPeriodsRef.current(
                   'EXPENSE',
                   bundle.expenseRows,
@@ -552,33 +564,50 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
 
   const handleExecuteExport = async (params: {
     format: ExportFormat;
-    mode: LedgerMode;
-    rows: LedgerRow[];
+    scope: ExportLedgerScope;
+    salesRows: LedgerRow[];
+    purchasesRows: LedgerRow[];
     periodLabel: string;
     filenameTag: string;
   }) => {
     const prefix = `${client.slug}_`;
+    if (params.scope === 'CONSOLIDATED') {
+      const blob = buildConsolidatedFilingXlsxBlob(params.salesRows, params.purchasesRows);
+      downloadXlsxBlob(
+        `${prefix}FORMAT_FOR_FILING_SALES_AND_PURCHASES_${params.filenameTag}.xlsx`,
+        blob
+      );
+      showToast(
+        `Exported consolidated .xlsx (${params.salesRows.length} Sales, ${params.purchasesRows.length} Purchases · ${params.periodLabel}).`
+      );
+      return;
+    }
+
+    const mode: LedgerMode = params.scope;
+    const rows = mode === 'SALES' ? params.salesRows : params.purchasesRows;
+    const label = mode === 'PURCHASES' ? 'EXPENSES' : 'SALES';
+
     if (params.format === 'CSV') {
-      const csv = exportFilingCsv(params.mode, params.rows);
+      const csv = exportFilingCsv(mode, rows);
       triggerFileDownload(
-        `${prefix}FORMAT_FOR_FILING_${params.mode}_${params.filenameTag}.csv`,
+        `${prefix}FORMAT_FOR_FILING_${mode}_${params.filenameTag}.csv`,
         csv
       );
-      showToast(`Exported ${params.rows.length} ${params.mode === 'PURCHASES' ? 'EXPENSES' : 'SALES'} rows (${params.periodLabel}).`);
+      showToast(`Exported ${rows.length} ${label} rows (${params.periodLabel}).`);
       return;
     }
     if (params.format === 'XLSX') {
-      const blob = buildFilingXlsxBlob(params.mode, params.rows);
+      const blob = buildFilingXlsxBlob(mode, rows);
       downloadXlsxBlob(
-        `${prefix}FORMAT_FOR_FILING_${params.mode}_${params.filenameTag}.xlsx`,
+        `${prefix}FORMAT_FOR_FILING_${mode}_${params.filenameTag}.xlsx`,
         blob
       );
-      showToast(`Exported ${params.rows.length} ${params.mode === 'PURCHASES' ? 'EXPENSES' : 'SALES'} rows (${params.periodLabel}).`);
+      showToast(`Exported ${rows.length} ${label} rows (${params.periodLabel}).`);
       return;
     }
     try {
-      await copyFilingTableForGoogleSheets(params.mode, params.rows);
-      showToast(`Copied ${params.rows.length} rows (${params.periodLabel}) for Google Sheets.`);
+      await copyFilingTableForGoogleSheets(mode, rows);
+      showToast(`Copied ${rows.length} rows (${params.periodLabel}) for Google Sheets.`);
     } catch {
       showToast('Clipboard copy failed. Use Export .xlsx instead.', 'error');
     }

@@ -23,12 +23,14 @@ import {
   FILING_MONTHS,
   calculateRowTaxes,
   deriveMonthFromDate,
+  evaluateFormulaExpression,
   extractYearFromDate,
   formatAccounting,
   formatDateSlash,
   formatPlainInput,
   formatTin,
   getDefaultDateForCover,
+  isFormulaExpression,
   isValidTinDigits,
   normalizeTinDigits,
   parseAmount,
@@ -67,6 +69,13 @@ function parseAccountTitleLines(raw: string): string[] {
   );
 }
 
+function getActiveEwtAmount(ln: Pick<SplitLineDraft, 'category' | 'wtGoods1' | 'wtServices2' | 'wtRental5'>): number | null {
+  if (ln.category === 'GOODS') return ln.wtGoods1;
+  if (ln.category === 'SERVICES') return ln.wtServices2;
+  if (ln.category === 'RENTAL') return ln.wtRental5;
+  return null;
+}
+
 function createDraftLine(
   category: TransactionCategory = 'GOODS',
   privateOrGovt: EntityType = 'PRIVATE',
@@ -78,8 +87,14 @@ function createDraftLine(
     key: `line-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     category,
     taxStatus,
+    rawRealAmount: '',
     rawNonVat: '',
     rawAmount: '',
+    rawNetOfVat: '',
+    rawVat: '',
+    rawTotal: '',
+    rawEwt: '',
+    rawWtVat5: '',
     applyGovtVat5: privateOrGovt === 'GOVT',
     manualOverride: false,
     particular,
@@ -100,12 +115,20 @@ function createDraftLine(
 
 function draftFromRow(row: LedgerRow): SplitLineDraft {
   const isVatable = (row.grossOfVat ?? 0) > 0;
+  const realSum = round2((row.nonVatExempt ?? 0) + (row.grossOfVat ?? 0));
+  const ewtVal = getActiveEwtAmount(row);
   return {
     key: row.id,
     category: row.category,
     taxStatus: isVatable ? 'VATABLE' : 'NON_VAT',
+    rawRealAmount: realSum > 0 ? formatPlainInput(realSum) : '',
     rawNonVat: formatPlainInput(row.nonVatExempt),
     rawAmount: formatPlainInput(row.grossOfVat),
+    rawNetOfVat: formatPlainInput(row.netOfVat),
+    rawVat: formatPlainInput(row.vat),
+    rawTotal: formatPlainInput(row.total),
+    rawEwt: formatPlainInput(ewtVal),
+    rawWtVat5: formatPlainInput(row.wtVat5),
     applyGovtVat5: row.applyGovtVat5,
     manualOverride: row.manualOverride,
     particular: row.particular ?? '',
@@ -121,6 +144,28 @@ function draftFromRow(row: LedgerRow): SplitLineDraft {
     wtVat5: row.wtVat5,
     rawActual: formatPlainInput(row.actual),
     remarks: row.remarks,
+  };
+}
+
+function computePurchasesEwt(
+  category: TransactionCategory,
+  whtAgent: YesNo,
+  nonVat: number | null,
+  netOfVat: number | null
+): { wtGoods1: number | null; wtServices2: number | null; wtRental5: number | null; rawEwt: string } {
+  const taxBase = round2((nonVat ?? 0) + (netOfVat ?? 0));
+  if (taxBase <= 0 || whtAgent !== 'YES' || category === 'N/A') {
+    return { wtGoods1: null, wtServices2: null, wtRental5: null, rawEwt: '' };
+  }
+  const wtGoods1 = category === 'GOODS' ? round2(taxBase * 0.01) : null;
+  const wtServices2 = category === 'SERVICES' ? round2(taxBase * 0.02) : null;
+  const wtRental5 = category === 'RENTAL' ? round2(taxBase * 0.05) : null;
+  const activeVal = wtGoods1 ?? wtServices2 ?? wtRental5;
+  return {
+    wtGoods1,
+    wtServices2,
+    wtRental5,
+    rawEwt: formatPlainInput(activeVal),
   };
 }
 
@@ -295,6 +340,14 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
       applyGovtVat5: mode === 'SALES' && entityType === 'GOVT' ? draft.applyGovtVat5 : false,
       withholdingAgent: whtAgent,
     });
+    const activeEwt =
+      draft.category === 'GOODS'
+        ? calc.wtGoods1
+        : draft.category === 'SERVICES'
+        ? calc.wtServices2
+        : draft.category === 'RENTAL'
+        ? calc.wtRental5
+        : null;
     return {
       ...draft,
       taxStatus: grossAmt !== null ? 'VATABLE' : 'NON_VAT',
@@ -303,10 +356,15 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
       netOfVat: calc.netOfVat,
       vat: calc.vat,
       total: calc.total,
+      rawNetOfVat: formatPlainInput(calc.netOfVat),
+      rawVat: formatPlainInput(calc.vat),
+      rawTotal: formatPlainInput(calc.total),
       wtGoods1: calc.wtGoods1,
       wtServices2: calc.wtServices2,
       wtRental5: calc.wtRental5,
       wtVat5: calc.wtVat5,
+      rawEwt: formatPlainInput(activeEwt),
+      rawWtVat5: formatPlainInput(calc.wtVat5),
     };
   };
 
@@ -358,17 +416,362 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
     setTinAutofilled(true);
   };
 
-  const updateLine = (key: string, patch: Partial<SplitLineDraft>, forceRecalc = false) => {
+  const prepareLineForManualBackward = (ln: SplitLineDraft): SplitLineDraft => {
+    const activeEwt = getActiveEwtAmount(ln);
+    if (mode !== 'PURCHASES') {
+      return {
+        ...ln,
+        manualOverride: true,
+        rawNetOfVat: formatPlainInput(ln.netOfVat),
+        rawVat: formatPlainInput(ln.vat),
+        rawTotal: formatPlainInput(ln.total),
+        rawEwt: formatPlainInput(activeEwt),
+        rawWtVat5: formatPlainInput(ln.wtVat5),
+      };
+    }
+    const exVatTotal = round2((ln.nonVatExempt ?? 0) + (ln.netOfVat ?? 0));
+    const realSum = round2((ln.nonVatExempt ?? 0) + (ln.grossOfVat ?? 0));
+    const nextTotal = exVatTotal > 0 ? exVatTotal : ln.total;
+    return {
+      ...ln,
+      manualOverride: true,
+      total: nextTotal,
+      rawTotal: formatPlainInput(nextTotal),
+      rawVat: formatPlainInput(ln.vat),
+      rawNetOfVat: formatPlainInput(ln.netOfVat),
+      rawEwt: formatPlainInput(activeEwt),
+      rawRealAmount: realSum > 0 ? formatPlainInput(realSum) : (ln.rawRealAmount ?? ''),
+    };
+  };
+
+  const handleToggleLineManualOverride = (key: string, override: boolean) => {
+    setLines((prev) =>
+      prev.map((ln) => {
+        if (ln.key !== key) return ln;
+        if (override) {
+          return prepareLineForManualBackward(ln);
+        }
+        return recomputeDraftLine({ ...ln, manualOverride: false }, privateOrGovt, withholdingAgent);
+      })
+    );
+  };
+
+  const updateLine = (key: string, patch: Partial<SplitLineDraft>) => {
     setLines((prev) =>
       prev.map((ln) => {
         if (ln.key !== key) return ln;
         const merged = { ...ln, ...patch };
-        if (forceRecalc || (autoCalcEnabled && !merged.manualOverride)) {
+        if (autoCalcEnabled && !merged.manualOverride) {
           return recomputeDraftLine(merged, privateOrGovt, withholdingAgent);
+        }
+        if (mode === 'PURCHASES' && patch.category !== undefined) {
+          const ewt = computePurchasesEwt(
+            merged.category,
+            withholdingAgent,
+            merged.nonVatExempt,
+            merged.netOfVat
+          );
+          return { ...merged, ...ewt };
+        }
+        if (mode === 'SALES' && patch.category !== undefined) {
+          return { ...merged, rawEwt: formatPlainInput(getActiveEwtAmount(merged)) };
         }
         return merged;
       })
     );
+  };
+
+  const commitFormulaInput = (raw: string, applyValue: (resolved: string) => void): boolean => {
+    if (!isFormulaExpression(raw)) return false;
+    const evaluated = evaluateFormulaExpression(raw);
+    if (evaluated === null) return false;
+    applyValue(evaluated === 0 ? '0.00' : evaluated.toFixed(2));
+    return true;
+  };
+
+  const handleFormulaKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    applyValue: (resolved: string) => void
+  ) => {
+    if (e.key === 'Enter' && isFormulaExpression(e.currentTarget.value)) {
+      e.preventDefault();
+      commitFormulaInput(e.currentTarget.value, applyValue);
+    }
+  };
+
+  const handleFormulaBlur = (
+    e: React.FocusEvent<HTMLInputElement>,
+    applyValue: (resolved: string) => void
+  ) => {
+    commitFormulaInput(e.currentTarget.value, applyValue);
+  };
+
+  const handleRealAmountChange = (ln: SplitLineDraft, val: string) => {
+    const realAmt = parseAmount(val);
+    const nonVatAmt = parseAmount(ln.rawNonVat);
+    const isManualPurchases = ln.manualOverride || !autoCalcEnabled;
+
+    if (val.trim() === '') {
+      if (isManualPurchases) {
+        updateLine(ln.key, {
+          rawRealAmount: '',
+          rawAmount: '',
+          grossOfVat: null,
+          netOfVat: null,
+          rawNetOfVat: '',
+          total: null,
+          rawTotal: '',
+          wtGoods1: null,
+          wtServices2: null,
+          wtRental5: null,
+          rawEwt: '',
+        });
+      } else {
+        updateLine(ln.key, {
+          rawRealAmount: '',
+          rawAmount: '',
+          grossOfVat: null,
+        });
+      }
+      return;
+    }
+
+    if (isManualPurchases) {
+      if (realAmt !== null) {
+        const grossVal = round2(Math.max(0, realAmt - (nonVatAmt ?? 0)));
+        const netVal = round2(Math.max(0, grossVal - (ln.vat ?? 0)));
+        const nextTotal = round2(Math.max(0, realAmt - (ln.vat ?? 0)));
+        const ewt = computePurchasesEwt(ln.category, withholdingAgent, nonVatAmt, netVal);
+        updateLine(ln.key, {
+          rawRealAmount: val,
+          grossOfVat: grossVal > 0 ? grossVal : null,
+          rawAmount: formatPlainInput(grossVal),
+          netOfVat: netVal > 0 ? netVal : null,
+          rawNetOfVat: formatPlainInput(netVal),
+          total: nextTotal > 0 ? nextTotal : null,
+          rawTotal: formatPlainInput(nextTotal),
+          ...ewt,
+        });
+      } else {
+        updateLine(ln.key, { rawRealAmount: val });
+      }
+      return;
+    }
+
+    const grossVal = realAmt !== null ? round2(Math.max(0, realAmt - (nonVatAmt ?? 0))) : 0;
+    updateLine(ln.key, {
+      rawRealAmount: val,
+      rawAmount: grossVal > 0 ? grossVal.toFixed(2) : '',
+      grossOfVat: grossVal > 0 ? grossVal : null,
+    });
+  };
+
+  const handleNonVatChange = (ln: SplitLineDraft, val: string) => {
+    const nonVatAmt = parseAmount(val);
+    const isManualPurchases = mode === 'PURCHASES' && (ln.manualOverride || !autoCalcEnabled);
+
+    if (isManualPurchases) {
+      const netVal = ln.netOfVat;
+      const vatVal = ln.vat;
+      const grossVal =
+        netVal !== null || vatVal !== null
+          ? round2((netVal ?? 0) + (vatVal ?? 0))
+          : ln.grossOfVat;
+      const nextTotal =
+        nonVatAmt !== null || netVal !== null ? round2((nonVatAmt ?? 0) + (netVal ?? 0)) : null;
+      const realAmt =
+        nonVatAmt !== null || grossVal !== null ? round2((nonVatAmt ?? 0) + (grossVal ?? 0)) : null;
+      const ewt = computePurchasesEwt(ln.category, withholdingAgent, nonVatAmt, netVal);
+      updateLine(ln.key, {
+        rawNonVat: val,
+        nonVatExempt: nonVatAmt,
+        grossOfVat: grossVal && grossVal > 0 ? grossVal : null,
+        rawAmount: formatPlainInput(grossVal),
+        total: nextTotal && nextTotal > 0 ? nextTotal : null,
+        rawTotal: formatPlainInput(nextTotal),
+        rawRealAmount: formatPlainInput(realAmt),
+        ...ewt,
+      });
+      return;
+    }
+
+    if (mode === 'PURCHASES' && (ln.rawRealAmount ?? '').trim() !== '') {
+      const realAmt = parseAmount(ln.rawRealAmount);
+      const grossVal = realAmt !== null ? round2(Math.max(0, realAmt - (nonVatAmt ?? 0))) : 0;
+      updateLine(ln.key, {
+        rawNonVat: val,
+        nonVatExempt: nonVatAmt,
+        rawAmount: grossVal > 0 ? grossVal.toFixed(2) : '',
+        grossOfVat: grossVal > 0 ? grossVal : null,
+      });
+      return;
+    }
+
+    updateLine(ln.key, {
+      rawNonVat: val,
+      nonVatExempt: nonVatAmt,
+    });
+  };
+
+  const handleGrossAmountChange = (ln: SplitLineDraft, val: string) => {
+    const grossAmt = parseAmount(val);
+    const nonVatAmt = parseAmount(ln.rawNonVat);
+    const isManualPurchases = mode === 'PURCHASES' && (ln.manualOverride || !autoCalcEnabled);
+
+    if (isManualPurchases) {
+      const netVal = grossAmt !== null ? round2(Math.max(0, grossAmt - (ln.vat ?? 0))) : null;
+      const nextTotal =
+        nonVatAmt !== null || netVal !== null ? round2((nonVatAmt ?? 0) + (netVal ?? 0)) : null;
+      const realSum =
+        nonVatAmt !== null || grossAmt !== null ? round2((nonVatAmt ?? 0) + (grossAmt ?? 0)) : null;
+      const ewt = computePurchasesEwt(ln.category, withholdingAgent, nonVatAmt, netVal);
+      updateLine(ln.key, {
+        rawAmount: val,
+        grossOfVat: grossAmt,
+        netOfVat: netVal,
+        rawNetOfVat: formatPlainInput(netVal),
+        total: nextTotal,
+        rawTotal: formatPlainInput(nextTotal),
+        rawRealAmount: formatPlainInput(realSum),
+        ...ewt,
+      });
+      return;
+    }
+
+    if (mode === 'PURCHASES' && (ln.rawRealAmount ?? '').trim() !== '') {
+      const realSum = round2((nonVatAmt ?? 0) + (grossAmt ?? 0));
+      updateLine(ln.key, {
+        rawAmount: val,
+        grossOfVat: grossAmt,
+        rawRealAmount: realSum > 0 ? formatPlainInput(realSum) : '',
+      });
+      return;
+    }
+
+    updateLine(ln.key, {
+      rawAmount: val,
+      grossOfVat: grossAmt,
+    });
+  };
+
+  const handleNetOfVatChange = (ln: SplitLineDraft, val: string) => {
+    const netVal = parseAmount(val);
+    if (mode === 'PURCHASES') {
+      const nonVatAmt = parseAmount(ln.rawNonVat);
+      const vatVal = ln.vat;
+      const nextTotal =
+        nonVatAmt !== null || netVal !== null ? round2((nonVatAmt ?? 0) + (netVal ?? 0)) : null;
+      const realAmt =
+        vatVal !== null || nextTotal !== null ? round2((vatVal ?? 0) + (nextTotal ?? 0)) : null;
+      const grossVal = realAmt !== null ? round2(Math.max(0, realAmt - (nonVatAmt ?? 0))) : null;
+      const ewt = computePurchasesEwt(ln.category, withholdingAgent, nonVatAmt, netVal);
+      updateLine(ln.key, {
+        rawNetOfVat: val,
+        netOfVat: netVal,
+        total: nextTotal,
+        rawTotal: formatPlainInput(nextTotal),
+        rawRealAmount: formatPlainInput(realAmt),
+        grossOfVat: grossVal && grossVal > 0 ? grossVal : null,
+        rawAmount: formatPlainInput(grossVal),
+        ...ewt,
+      });
+      return;
+    }
+    updateLine(ln.key, { rawNetOfVat: val, netOfVat: netVal });
+  };
+
+  const handleVatChange = (ln: SplitLineDraft, val: string) => {
+    const vatVal = parseAmount(val);
+    if (mode === 'PURCHASES') {
+      const nonVatAmt = parseAmount(ln.rawNonVat);
+      if (vatVal === null) {
+        const nextTotal = nonVatAmt !== null ? round2(nonVatAmt) : null;
+        const ewt = computePurchasesEwt(ln.category, withholdingAgent, nonVatAmt, null);
+        updateLine(ln.key, {
+          rawVat: val,
+          vat: null,
+          netOfVat: null,
+          rawNetOfVat: '',
+          grossOfVat: null,
+          rawAmount: '',
+          total: nextTotal,
+          rawTotal: formatPlainInput(nextTotal),
+          rawRealAmount: formatPlainInput(nextTotal),
+          ...ewt,
+        });
+        return;
+      }
+
+      const netVal = round2(vatVal / 0.12);
+      const grossVal = round2(netVal + vatVal);
+      const nextTotal = round2((nonVatAmt ?? 0) + netVal);
+      const realAmt = round2(vatVal + nextTotal);
+      const ewt = computePurchasesEwt(ln.category, withholdingAgent, nonVatAmt, netVal);
+      updateLine(ln.key, {
+        rawVat: val,
+        vat: vatVal,
+        netOfVat: netVal,
+        rawNetOfVat: formatPlainInput(netVal),
+        grossOfVat: grossVal,
+        rawAmount: formatPlainInput(grossVal),
+        total: nextTotal,
+        rawTotal: formatPlainInput(nextTotal),
+        rawRealAmount: formatPlainInput(realAmt),
+        ...ewt,
+      });
+      return;
+    }
+    updateLine(ln.key, { rawVat: val, vat: vatVal });
+  };
+
+  const handleTotalChange = (ln: SplitLineDraft, val: string) => {
+    const totalVal = parseAmount(val);
+    if (mode === 'PURCHASES') {
+      const vatVal = ln.vat;
+      const nonVatAmt = parseAmount(ln.rawNonVat);
+      if (vatVal !== null || totalVal !== null) {
+        const realAmt = round2((vatVal ?? 0) + (totalVal ?? 0));
+        const grossVal = round2(Math.max(0, realAmt - (nonVatAmt ?? 0)));
+        const netVal = round2(Math.max(0, grossVal - (vatVal ?? 0)));
+        const ewt = computePurchasesEwt(ln.category, withholdingAgent, nonVatAmt, netVal);
+        updateLine(ln.key, {
+          rawTotal: val,
+          total: totalVal,
+          rawRealAmount: formatPlainInput(realAmt),
+          grossOfVat: grossVal > 0 ? grossVal : null,
+          rawAmount: formatPlainInput(grossVal),
+          netOfVat: netVal > 0 ? netVal : null,
+          rawNetOfVat: formatPlainInput(netVal),
+          ...ewt,
+        });
+      } else {
+        const ewt = computePurchasesEwt(ln.category, withholdingAgent, nonVatAmt, null);
+        updateLine(ln.key, {
+          rawTotal: val,
+          total: null,
+          rawRealAmount: '',
+          grossOfVat: null,
+          rawAmount: '',
+          netOfVat: null,
+          rawNetOfVat: '',
+          ...ewt,
+        });
+      }
+      return;
+    }
+    updateLine(ln.key, { rawTotal: val, total: totalVal });
+  };
+
+  const handleEwtChange = (ln: SplitLineDraft, val: string) => {
+    const parsed = parseAmount(val);
+    if (ln.category === 'GOODS') updateLine(ln.key, { rawEwt: val, wtGoods1: parsed });
+    else if (ln.category === 'SERVICES') updateLine(ln.key, { rawEwt: val, wtServices2: parsed });
+    else if (ln.category === 'RENTAL') updateLine(ln.key, { rawEwt: val, wtRental5: parsed });
+    else updateLine(ln.key, { rawEwt: val });
+  };
+
+  const handleWtVat5Change = (ln: SplitLineDraft, val: string) => {
+    updateLine(ln.key, { rawWtVat5: val, wtVat5: parseAmount(val) });
   };
 
   const handleEntityTypeChange = (nextType: EntityType) => {
@@ -387,7 +790,18 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
   const handleWithholdingAgentChange = (nextAgent: YesNo) => {
     setWithholdingAgent(nextAgent);
     setLines((prev) =>
-      prev.map((ln) => recomputeDraftLine(ln, privateOrGovt, nextAgent))
+      prev.map((ln) => {
+        if (!autoCalcEnabled || ln.manualOverride) {
+          if (mode === 'PURCHASES') {
+            return {
+              ...ln,
+              ...computePurchasesEwt(ln.category, nextAgent, ln.nonVatExempt, ln.netOfVat),
+            };
+          }
+          return ln;
+        }
+        return recomputeDraftLine(ln, privateOrGovt, nextAgent);
+      })
     );
   };
 
@@ -566,6 +980,13 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                     prev.map((ln) =>
                       recomputeDraftLine({ ...ln, manualOverride: false }, privateOrGovt, withholdingAgent)
                     )
+                  );
+                } else if (mode === 'PURCHASES') {
+                  setLines((prev) =>
+                    prev.map((ln) => {
+                      const prepared = prepareLineForManualBackward(ln);
+                      return { ...prepared, manualOverride: ln.manualOverride };
+                    })
                   );
                 }
               }}
@@ -885,8 +1306,14 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                 (ln.wtServices2 ?? 0) +
                 (ln.wtRental5 ?? 0) +
                 (ln.wtVat5 ?? 0);
+              const payableBase =
+                mode === 'PURCHASES' && (ln.nonVatExempt !== null || ln.grossOfVat !== null)
+                  ? round2((ln.nonVatExempt ?? 0) + (ln.grossOfVat ?? 0))
+                  : ln.total;
               const expectedActual =
-                ln.total !== null ? round2(ln.total - totalWht) : null;
+                payableBase !== null && (ln.total !== null || payableBase > 0)
+                  ? round2(payableBase - totalWht)
+                  : null;
 
               const activeEwtRateLabel =
                 ln.category === 'GOODS'
@@ -916,7 +1343,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                           <button
                             key={cat}
                             type="button"
-                            onClick={() => updateLine(ln.key, { category: cat }, true)}
+                            onClick={() => updateLine(ln.key, { category: cat })}
                             className={`inline-flex items-center justify-center rounded px-2.5 py-1 text-xs font-semibold leading-normal whitespace-nowrap transition-colors cursor-pointer ${
                               ln.category === cat
                                 ? 'bg-blue-600 text-white'
@@ -934,7 +1361,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                             type="checkbox"
                             checked={ln.applyGovtVat5}
                             onChange={(e) =>
-                              updateLine(ln.key, { applyGovtVat5: e.target.checked }, true)
+                              updateLine(ln.key, { applyGovtVat5: e.target.checked })
                             }
                             className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600"
                           />
@@ -952,18 +1379,31 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                      <label
+                        title={
+                          mode === 'PURCHASES'
+                            ? 'Backward formula: add VAT + TOTAL to compute REAL AMOUNT, then deduct NON-VAT for GROSS AMOUNT'
+                            : 'Manually edit computed VAT and withholding fields'
+                        }
+                        className={`inline-flex items-center gap-1.5 text-xs cursor-pointer ${
+                          mode === 'PURCHASES' && (ln.manualOverride || !autoCalcEnabled)
+                            ? 'font-semibold text-amber-800'
+                            : 'text-slate-600'
+                        }`}
+                      >
                         <input
                           type="checkbox"
                           checked={ln.manualOverride || !autoCalcEnabled}
                           disabled={!autoCalcEnabled}
-                          onChange={(e) => {
-                            const override = e.target.checked;
-                            updateLine(ln.key, { manualOverride: override }, !override);
-                          }}
+                          onChange={(e) => handleToggleLineManualOverride(ln.key, e.target.checked)}
                           className="h-3.5 w-3.5 rounded border-slate-300 text-amber-600"
                         />
-                        Manual Override
+                        <span>Manual Override</span>
+                        {mode === 'PURCHASES' && (ln.manualOverride || !autoCalcEnabled) && (
+                          <span className="text-[11px] font-medium text-amber-700">
+                            (VAT + TOTAL → Real)
+                          </span>
+                        )}
                       </label>
 
                       {entryType === 'SPLIT' && lines.length > 1 && (
@@ -1108,59 +1548,85 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                   )}
 
                   {/* Numeric Fields Grid */}
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-12 items-end">
-                    <div className="col-span-2 sm:col-span-2 lg:col-span-2">
+                  <div
+                    className={
+                      mode === 'PURCHASES'
+                        ? 'grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8 items-end'
+                        : 'grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-12 items-end'
+                    }
+                  >
+                    {mode === 'PURCHASES' && (
+                      <div className="col-span-2 sm:col-span-1">
+                        <label
+                          title="Helper calculation field only (not exported to Excel / XLSX) · Supports =5+5 formulas"
+                          className="block text-[11px] font-semibold leading-normal text-blue-800 mb-1"
+                        >
+                          REAL AMOUNT
+                        </label>
+                        <input
+                          ref={idx === 0 ? amountInputRef : undefined}
+                          type="text"
+                          inputMode="decimal"
+                          title="Enter amount or formula like =5+5 (press Enter or Tab to compute)"
+                          value={ln.rawRealAmount ?? ''}
+                          onChange={(e) => handleRealAmountChange(ln, e.target.value)}
+                          onKeyDown={(e) => handleFormulaKeyDown(e, (v) => handleRealAmountChange(ln, v))}
+                          onBlur={(e) => handleFormulaBlur(e, (v) => handleRealAmountChange(ln, v))}
+                          placeholder="0.00 or =5+5"
+                          className="w-full rounded-lg border border-blue-300 bg-blue-50/40 px-2.5 py-1.5 text-right text-sm leading-normal tabular-nums-mono font-semibold text-slate-900 focus:border-blue-600 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+                        />
+                      </div>
+                    )}
+
+                    <div className={mode === 'PURCHASES' ? 'col-span-1' : 'col-span-2 sm:col-span-2 lg:col-span-2'}>
                       <label className="block text-[11px] font-medium leading-normal text-slate-600 mb-1">
                         NON-VAT / VAT EXEMPT
                       </label>
                       <input
-                        ref={idx === 0 ? amountInputRef : undefined}
-                        type="number"
-                        step="0.01"
-                        min="0"
+                        ref={mode === 'SALES' && idx === 0 ? amountInputRef : undefined}
+                        type="text"
+                        inputMode="decimal"
+                        title="Enter amount or formula like =5+5 (press Enter or Tab to compute)"
                         value={ln.rawNonVat}
-                        onChange={(e) =>
-                          updateLine(ln.key, {
-                            rawNonVat: e.target.value,
-                            nonVatExempt: parseAmount(e.target.value),
-                          })
-                        }
+                        onChange={(e) => handleNonVatChange(ln, e.target.value)}
+                        onKeyDown={(e) => handleFormulaKeyDown(e, (v) => handleNonVatChange(ln, v))}
+                        onBlur={(e) => handleFormulaBlur(e, (v) => handleNonVatChange(ln, v))}
                         placeholder="0.00"
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-right text-sm leading-normal tabular-nums-mono font-semibold text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-right text-sm leading-normal tabular-nums-mono font-semibold text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
                       />
                     </div>
 
-                    <div className="col-span-2 sm:col-span-2 lg:col-span-2">
+                    <div className={mode === 'PURCHASES' ? 'col-span-1' : 'col-span-2 sm:col-span-2 lg:col-span-2'}>
                       <label className="block text-[11px] font-medium leading-normal text-slate-600 mb-1">
                         GROSS AMOUNT
                       </label>
                       <input
-                        type="number"
-                        step="0.01"
-                        min="0"
+                        type="text"
+                        inputMode="decimal"
+                        title="Enter amount or formula like =5+5 (press Enter or Tab to compute)"
                         value={ln.rawAmount}
-                        onChange={(e) =>
-                          updateLine(ln.key, {
-                            rawAmount: e.target.value,
-                            grossOfVat: parseAmount(e.target.value),
-                          })
-                        }
+                        onChange={(e) => handleGrossAmountChange(ln, e.target.value)}
+                        onKeyDown={(e) => handleFormulaKeyDown(e, (v) => handleGrossAmountChange(ln, v))}
+                        onBlur={(e) => handleFormulaBlur(e, (v) => handleGrossAmountChange(ln, v))}
                         placeholder="0.00"
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-right text-sm leading-normal tabular-nums-mono font-semibold text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-right text-sm leading-normal tabular-nums-mono font-semibold text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
                       />
                     </div>
 
                     {/* NET OF VAT */}
-                    <div className={mode === 'PURCHASES' ? 'lg:col-span-2' : 'lg:col-span-1'}>
+                    <div className={mode === 'PURCHASES' ? 'col-span-1' : 'lg:col-span-1'}>
                       <label className="block text-[11px] font-medium leading-normal text-slate-500 mb-1">
                         NET OF VAT
                       </label>
                       {ln.manualOverride || !autoCalcEnabled ? (
                         <input
-                          type="number"
-                          step="0.01"
-                          value={formatPlainInput(ln.netOfVat)}
-                          onChange={(e) => updateLine(ln.key, { netOfVat: parseAmount(e.target.value) })}
+                          type="text"
+                          inputMode="decimal"
+                          title="Enter amount or formula like =5+5 (press Enter or Tab to compute)"
+                          value={ln.rawNetOfVat ?? formatPlainInput(ln.netOfVat)}
+                          onChange={(e) => handleNetOfVatChange(ln, e.target.value)}
+                          onKeyDown={(e) => handleFormulaKeyDown(e, (v) => handleNetOfVatChange(ln, v))}
+                          onBlur={(e) => handleFormulaBlur(e, (v) => handleNetOfVatChange(ln, v))}
                           placeholder="-"
                           className="min-h-[34px] w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs leading-normal tabular-nums-mono"
                         />
@@ -1172,16 +1638,23 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                     </div>
 
                     {/* VAT */}
-                    <div className="lg:col-span-1">
+                    <div className={mode === 'PURCHASES' ? 'col-span-1' : 'lg:col-span-1'}>
                       <label className="block text-[11px] font-medium leading-normal text-slate-500 mb-1">
                         VAT (12%)
                       </label>
                       {ln.manualOverride || !autoCalcEnabled ? (
                         <input
-                          type="number"
-                          step="0.01"
-                          value={formatPlainInput(ln.vat)}
-                          onChange={(e) => updateLine(ln.key, { vat: parseAmount(e.target.value) })}
+                          type="text"
+                          inputMode="decimal"
+                          title={
+                            mode === 'PURCHASES'
+                              ? 'Backward formula: NET = VAT / 0.12, GROSS = NET + VAT, TOTAL = NON-VAT + NET, REAL AMOUNT = VAT + TOTAL · Supports =5+5'
+                              : 'Enter amount or formula like =5+5 (press Enter or Tab to compute)'
+                          }
+                          value={ln.rawVat ?? formatPlainInput(ln.vat)}
+                          onChange={(e) => handleVatChange(ln, e.target.value)}
+                          onKeyDown={(e) => handleFormulaKeyDown(e, (v) => handleVatChange(ln, v))}
+                          onBlur={(e) => handleFormulaBlur(e, (v) => handleVatChange(ln, v))}
                           placeholder="-"
                           className="min-h-[34px] w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs leading-normal tabular-nums-mono"
                         />
@@ -1193,16 +1666,19 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                     </div>
 
                     {/* TOTAL */}
-                    <div className="lg:col-span-2">
+                    <div className={mode === 'PURCHASES' ? 'col-span-1' : 'lg:col-span-2'}>
                       <label className="block text-[11px] font-medium leading-normal text-slate-500 mb-1">
                         TOTAL
                       </label>
                       {ln.manualOverride || !autoCalcEnabled ? (
                         <input
-                          type="number"
-                          step="0.01"
-                          value={formatPlainInput(ln.total)}
-                          onChange={(e) => updateLine(ln.key, { total: parseAmount(e.target.value) })}
+                          type="text"
+                          inputMode="decimal"
+                          title="Enter amount or formula like =5+5 (press Enter or Tab to compute)"
+                          value={ln.rawTotal ?? formatPlainInput(ln.total)}
+                          onChange={(e) => handleTotalChange(ln, e.target.value)}
+                          onKeyDown={(e) => handleFormulaKeyDown(e, (v) => handleTotalChange(ln, v))}
+                          onBlur={(e) => handleFormulaBlur(e, (v) => handleTotalChange(ln, v))}
                           placeholder="-"
                           className="min-h-[34px] w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs leading-normal tabular-nums-mono font-semibold"
                         />
@@ -1214,50 +1690,32 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                     </div>
 
                     {/* EWT (1% / 2% / 5%) */}
-                    <div className="lg:col-span-1">
+                    <div className={mode === 'PURCHASES' ? 'col-span-1' : 'lg:col-span-1'}>
                       <label className="block text-[11px] font-medium leading-normal text-slate-500 mb-1">
                         EWT ({activeEwtRateLabel})
                       </label>
                       {ln.manualOverride || !autoCalcEnabled ? (
                         <input
-                          type="number"
-                          step="0.01"
-                          value={formatPlainInput(
-                            ln.category === 'GOODS'
-                              ? ln.wtGoods1
-                              : ln.category === 'SERVICES'
-                              ? ln.wtServices2
-                              : ln.category === 'RENTAL'
-                              ? ln.wtRental5
-                              : null
-                          )}
-                          onChange={(e) => {
-                            const val = parseAmount(e.target.value);
-                            if (ln.category === 'GOODS') updateLine(ln.key, { wtGoods1: val });
-                            else if (ln.category === 'SERVICES') updateLine(ln.key, { wtServices2: val });
-                            else if (ln.category === 'RENTAL') updateLine(ln.key, { wtRental5: val });
-                          }}
+                          type="text"
+                          inputMode="decimal"
+                          title="Enter amount or formula like =5+5 (press Enter or Tab to compute)"
+                          value={ln.rawEwt ?? formatPlainInput(getActiveEwtAmount(ln))}
+                          onChange={(e) => handleEwtChange(ln, e.target.value)}
+                          onKeyDown={(e) => handleFormulaKeyDown(e, (v) => handleEwtChange(ln, v))}
+                          onBlur={(e) => handleFormulaBlur(e, (v) => handleEwtChange(ln, v))}
                           placeholder="-"
                           className="min-h-[34px] w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs leading-normal tabular-nums-mono"
                         />
                       ) : (
                         <div className="min-h-[34px] flex items-center justify-end rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-xs leading-normal tabular-nums-mono text-slate-700">
-                          {formatAccounting(
-                            ln.category === 'GOODS'
-                              ? ln.wtGoods1
-                              : ln.category === 'SERVICES'
-                              ? ln.wtServices2
-                              : ln.category === 'RENTAL'
-                              ? ln.wtRental5
-                              : null
-                          )}
+                          {formatAccounting(getActiveEwtAmount(ln))}
                         </div>
                       )}
                     </div>
 
                     {/* NET PAYABLE READOUT IN PURCHASES */}
                     {mode === 'PURCHASES' && (
-                      <div className="lg:col-span-2">
+                      <div className="col-span-1">
                         <label className="block text-[11px] font-medium leading-normal text-slate-500 mb-1">
                           NET PAYABLE
                         </label>
@@ -1276,10 +1734,13 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                           </label>
                           {ln.manualOverride || !autoCalcEnabled ? (
                             <input
-                              type="number"
-                              step="0.01"
-                              value={formatPlainInput(ln.wtVat5)}
-                              onChange={(e) => updateLine(ln.key, { wtVat5: parseAmount(e.target.value) })}
+                              type="text"
+                              inputMode="decimal"
+                              title="Enter amount or formula like =5+5 (press Enter or Tab to compute)"
+                              value={ln.rawWtVat5 ?? formatPlainInput(ln.wtVat5)}
+                              onChange={(e) => handleWtVat5Change(ln, e.target.value)}
+                              onKeyDown={(e) => handleFormulaKeyDown(e, (v) => handleWtVat5Change(ln, v))}
+                              onBlur={(e) => handleFormulaBlur(e, (v) => handleWtVat5Change(ln, v))}
                               placeholder="-"
                               className="min-h-[34px] w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs leading-normal tabular-nums-mono"
                             />
@@ -1307,10 +1768,17 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                             </button>
                           </div>
                           <input
-                            type="number"
-                            step="0.01"
+                            type="text"
+                            inputMode="decimal"
+                            title="Enter amount or formula like =5+5 (press Enter or Tab to compute)"
                             value={ln.rawActual}
                             onChange={(e) => updateLine(ln.key, { rawActual: e.target.value })}
+                            onKeyDown={(e) =>
+                              handleFormulaKeyDown(e, (v) => updateLine(ln.key, { rawActual: v }))
+                            }
+                            onBlur={(e) =>
+                              handleFormulaBlur(e, (v) => updateLine(ln.key, { rawActual: v }))
+                            }
                             placeholder="Leave blank if uncollected"
                             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-right text-xs leading-normal tabular-nums-mono font-semibold text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
                           />

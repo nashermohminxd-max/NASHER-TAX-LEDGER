@@ -144,25 +144,6 @@ export const LoginPage: React.FC = () => {
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[540px] w-[540px] rounded-full border border-white/40" />
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[760px] w-[760px] rounded-full border border-white/35" />
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[1000px] w-[1000px] rounded-full border border-white/25" />
-
-        {/* Subtle NPB Firm Emblem Anchors on Left & Right Canvas */}
-        <div className="hidden xl:flex absolute left-10 top-10 h-14 w-14 items-center justify-center overflow-hidden rounded-full border border-white/80 bg-white/90 shadow-sm backdrop-blur-md">
-          <img
-            src="/assets/aistudio/_72398019-0A06-4C5A-A7ED-05B462ABEA26__a9cdb4ac.png"
-            alt="NPB Noverben P. Bachiller, CPA Tax and Accounting Services"
-            referrerPolicy="no-referrer"
-            className="absolute left-1/2 top-1/2 h-auto w-[113%] max-w-none -translate-x-[51.7%] -translate-y-[53%]"
-          />
-        </div>
-
-        <div className="hidden xl:flex absolute right-12 bottom-10 h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-white/75 bg-white/85 shadow-sm backdrop-blur-md">
-          <img
-            src="/assets/aistudio/_72398019-0A06-4C5A-A7ED-05B462ABEA26__a9cdb4ac.png"
-            alt="Noverben P. Bachiller, CPA"
-            referrerPolicy="no-referrer"
-            className="absolute left-1/2 top-1/2 h-auto w-[113%] max-w-none -translate-x-[51.7%] -translate-y-[53%]"
-          />
-        </div>
       </div>
 
       {/* Centered Frosted Glass Login Card */}

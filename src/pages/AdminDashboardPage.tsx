@@ -4,6 +4,7 @@ import {
   AlertCircle,
   ArrowUpRight,
   Building2,
+  Calendar,
   CheckCircle2,
   Eye,
   EyeOff,
@@ -11,6 +12,7 @@ import {
   FolderPlus,
   HardDrive,
   KeyRound,
+  Layers,
   Loader2,
   LogOut,
   Search,
@@ -21,6 +23,11 @@ import {
 } from 'lucide-react';
 import { ChangePasswordModal } from '@/components/ChangePasswordModal';
 import { ClientWorkspaceView } from '@/components/ClientWorkspaceView';
+import {
+  ExportMonthModal,
+  type ExportFormat,
+  type ExportLedgerScope,
+} from '@/components/ExportMonthModal';
 import { useAuth } from '@/lib/authContext';
 import {
   assignClientLoginCredentials,
@@ -29,10 +36,19 @@ import {
   getClientDirectoryById,
   listClientDirectories,
   listVaultFiles,
+  loadClientLedgerBundle,
 } from '@/lib/portalStore';
-import { downloadVaultXlsxBlob, formatFileSize, triggerBlobDownload } from '@/lib/vaultService';
+import { formatFileSize } from '@/lib/vaultService';
 import type { ClientDirectory, TaxClassification, VaultXlsxFile } from '@/types/portal';
-import { formatTin } from '@/utils/taxEngine';
+import type { LedgerMode, LedgerRow } from '@/types/tax';
+import { exportFilingCsv, triggerFileDownload } from '@/utils/csvCodec';
+import { collectAvailableYears, formatTin } from '@/utils/taxEngine';
+import {
+  buildConsolidatedFilingXlsxBlob,
+  buildFilingXlsxBlob,
+  copyFilingTableForGoogleSheets,
+  downloadXlsxBlob,
+} from '@/utils/xlsxExport';
 
 export const AdminDashboardPage: React.FC = () => {
   const { user, signOut, isSupabaseMode } = useAuth();
@@ -75,12 +91,104 @@ export const AdminDashboardPage: React.FC = () => {
   const [deleteTarget, setDeleteTarget] = useState<ClientDirectory | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Consolidated Sales & Purchases Month/Quarter Export Modal
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportClientId, setExportClientId] = useState<string>('');
+  const [exportInitialMonth, setExportInitialMonth] = useState<string>('ALL');
+  const [exportInitialYear, setExportInitialYear] = useState<string>(String(new Date().getFullYear()));
+  const [exportSalesRows, setExportSalesRows] = useState<LedgerRow[]>([]);
+  const [exportPurchasesRows, setExportPurchasesRows] = useState<LedgerRow[]>([]);
+  const [exportLoading, setExportLoading] = useState(false);
+
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3500);
   }, []);
+
+  const loadExportBundleForClient = useCallback(
+    async (targetClientId: string, monthOverride?: string, yearOverride?: string) => {
+      setExportClientId(targetClientId);
+      setExportLoading(true);
+      try {
+        const bundle = await loadClientLedgerBundle(targetClientId);
+        setExportSalesRows(bundle.salesRows);
+        setExportPurchasesRows(bundle.expenseRows);
+        setExportInitialMonth(monthOverride ?? 'ALL');
+        setExportInitialYear(yearOverride ?? bundle.yearCover ?? String(new Date().getFullYear()));
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'Unable to load client ledger data.', 'error');
+      } finally {
+        setExportLoading(false);
+      }
+    },
+    [showToast]
+  );
+
+  const openConsolidatedExportModal = useCallback(
+    (targetClientId: string, options?: { month?: string; year?: string }) => {
+      if (!targetClientId) return;
+      if (options?.month) setExportInitialMonth(options.month);
+      if (options?.year) setExportInitialYear(options.year);
+      setExportModalOpen(true);
+      void loadExportBundleForClient(targetClientId, options?.month, options?.year);
+    },
+    [loadExportBundleForClient]
+  );
+
+  const exportTargetClient = useMemo(
+    () => directories.find((d) => d.id === exportClientId) ?? directories[0] ?? null,
+    [directories, exportClientId]
+  );
+
+  const exportAvailableYears = useMemo(
+    () => collectAvailableYears([...exportSalesRows, ...exportPurchasesRows]),
+    [exportSalesRows, exportPurchasesRows]
+  );
+
+  const handleExecuteVaultExport = async (params: {
+    format: ExportFormat;
+    scope: ExportLedgerScope;
+    salesRows: LedgerRow[];
+    purchasesRows: LedgerRow[];
+    periodLabel: string;
+    filenameTag: string;
+  }) => {
+    const slug = exportTargetClient?.slug ? `${exportTargetClient.slug}_` : '';
+    if (params.scope === 'CONSOLIDATED') {
+      const blob = buildConsolidatedFilingXlsxBlob(params.salesRows, params.purchasesRows);
+      downloadXlsxBlob(
+        `${slug}FORMAT_FOR_FILING_SALES_AND_PURCHASES_${params.filenameTag}.xlsx`,
+        blob
+      );
+      showToast(
+        `Exported consolidated .xlsx (${params.salesRows.length} Sales, ${params.purchasesRows.length} Purchases · ${params.periodLabel}).`
+      );
+      return;
+    }
+
+    const mode: LedgerMode = params.scope;
+    const rows = mode === 'SALES' ? params.salesRows : params.purchasesRows;
+    if (params.format === 'CSV') {
+      const csv = exportFilingCsv(mode, rows);
+      triggerFileDownload(`${slug}FORMAT_FOR_FILING_${mode}_${params.filenameTag}.csv`, csv);
+      showToast(`Exported ${rows.length} ${mode} rows (${params.periodLabel}).`);
+      return;
+    }
+    if (params.format === 'XLSX') {
+      const blob = buildFilingXlsxBlob(mode, rows);
+      downloadXlsxBlob(`${slug}FORMAT_FOR_FILING_${mode}_${params.filenameTag}.xlsx`, blob);
+      showToast(`Exported ${rows.length} ${mode} rows (${params.periodLabel}).`);
+      return;
+    }
+    try {
+      await copyFilingTableForGoogleSheets(mode, rows);
+      showToast(`Copied ${rows.length} rows (${params.periodLabel}) for Google Sheets.`);
+    } catch {
+      showToast('Clipboard copy failed. Use Export .xlsx instead.', 'error');
+    }
+  };
 
   const loadMasterData = useCallback(async () => {
     setLoading(true);
@@ -595,12 +703,22 @@ export const AdminDashboardPage: React.FC = () => {
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/70 px-5 py-3.5">
                 <h2 className="inline-flex items-center gap-2 font-display text-sm font-bold leading-snug text-slate-900">
                   <HardDrive className="h-4 w-4 text-[#0B4DA2] shrink-0" />
-                  <span>Global .XLSX Vault — All Client Files ({vaultFiles.length})</span>
+                  <span>Global .XLSX Vault — Client Consolidated Ledgers ({directories.length})</span>
                 </h2>
+                {directories.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => openConsolidatedExportModal(directories[0].id, { month: 'ALL' })}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#BBD6F2] bg-[#EBF3FC] px-3 py-1.5 text-xs font-semibold leading-normal text-[#0B4DA2] hover:bg-[#DCEBFB] transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <Layers className="h-3.5 w-3.5 shrink-0" />
+                    <span>Choose Client &amp; Month / Quarter</span>
+                  </button>
+                )}
               </div>
-              {vaultFiles.length === 0 ? (
+              {directories.length === 0 ? (
                 <div className="py-14 text-center text-xs text-slate-500">
-                  No .xlsx workbooks uploaded across client directories yet.
+                  No client directories registered yet.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -608,59 +726,68 @@ export const AdminDashboardPage: React.FC = () => {
                     <thead>
                       <tr className="border-b border-slate-200/80 bg-[#F4F8FD]/90 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
                         <th className="px-4 py-3 whitespace-nowrap">Client Directory</th>
-                        <th className="px-3 py-3 whitespace-nowrap">Workbook Name</th>
-                        <th className="px-3 py-3 whitespace-nowrap">Period</th>
-                        <th className="px-3 py-3 text-right whitespace-nowrap">Size</th>
+                        <th className="px-3 py-3 whitespace-nowrap">Consolidated Workbook</th>
+                        <th className="px-3 py-3 whitespace-nowrap">Period Cover</th>
+                        <th className="px-3 py-3 text-right whitespace-nowrap">Vault Size</th>
                         <th className="px-4 py-3 text-right whitespace-nowrap">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200/70">
-                      {vaultFiles.map((file) => {
-                        const owner = directories.find((d) => d.id === file.clientDirectoryId);
+                      {directories.map((dir) => {
+                        const usage = storageByClient.get(dir.id) ?? { bytes: 0, count: 0 };
                         return (
-                          <tr key={file.id} className="hover:bg-[#F5F9FE]/80 transition-colors">
-                            <td className="px-4 py-3.5 max-w-[220px] font-semibold leading-normal text-slate-900 break-words">
-                              {owner?.companyName ?? file.clientDirectoryId}
+                          <tr key={dir.id} className="hover:bg-[#F5F9FE]/80 transition-colors">
+                            <td className="px-4 py-3.5 max-w-[240px] font-semibold leading-normal text-slate-900 break-words">
+                              <button
+                                type="button"
+                                onClick={() => openConsolidatedExportModal(dir.id, { month: 'ALL' })}
+                                className="text-left group cursor-pointer"
+                              >
+                                <div className="font-display font-bold text-slate-900 group-hover:text-[#0B4DA2] transition-colors">
+                                  {dir.companyName}
+                                </div>
+                                <div className="text-[10px] font-medium text-slate-500">
+                                  All Sales &amp; Purchases · {dir.tin || 'No TIN'}
+                                </div>
+                              </button>
                             </td>
                             <td className="px-3 py-3.5 max-w-[320px]">
                               <div className="flex items-center gap-1.5 font-medium leading-normal text-slate-800 min-w-0">
                                 <FileSpreadsheet className="h-3.5 w-3.5 text-[#0B4DA2] shrink-0" />
-                                <span className="truncate leading-normal" title={file.fileName}>{file.fileName}</span>
+                                <span className="truncate leading-normal">
+                                  {dir.slug}_SALES_AND_PURCHASES.xlsx
+                                </span>
                               </div>
-                              <div className="font-mono text-[10px] leading-normal text-slate-400 break-all">
-                                {file.storagePath}
+                              <div className="font-mono text-[10px] leading-normal text-slate-500">
+                                2 Sheets: SALES &amp; PURCHASES ({usage.count} synced period{usage.count === 1 ? '' : 's'})
                               </div>
                             </td>
                             <td className="px-3 py-3.5 whitespace-nowrap">
-                              <span className="inline-flex items-center rounded-md bg-[#E7F0FC] px-2 py-0.5 font-mono text-[11px] font-semibold leading-normal text-[#0B4DA2]">
-                                {file.taxPeriod}
-                              </span>
+                              <button
+                                type="button"
+                                onClick={() => openConsolidatedExportModal(dir.id, { month: 'ALL' })}
+                                title="Choose Month or Quarter to download Consolidated Sales & Purchases .xlsx"
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-[#BBD6F2] bg-[#E7F0FC] px-2.5 py-1 font-mono text-[11px] font-semibold leading-normal text-[#0B4DA2] hover:border-[#0B4DA2] hover:bg-[#DCEBFB] transition-colors cursor-pointer"
+                              >
+                                <Calendar className="h-3 w-3 shrink-0" />
+                                <span>Choose Month / Qtr</span>
+                              </button>
                             </td>
                             <td className="px-3 py-3.5 text-right tabular-nums-mono whitespace-nowrap text-slate-800">
-                              {formatFileSize(file.sizeBytes)}
+                              {formatFileSize(usage.bytes)}
                             </td>
                             <td className="px-4 py-3.5 text-right whitespace-nowrap">
                               <div className="inline-flex items-center gap-1.5">
                                 <button
                                   type="button"
-                                  onClick={() => navigate(`/admin/client/${file.clientDirectoryId}`)}
+                                  onClick={() => navigate(`/admin/client/${dir.id}`)}
                                   className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium leading-normal text-slate-700 hover:bg-slate-50 cursor-pointer"
                                 >
                                   Open Client
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={async () => {
-                                    try {
-                                      const blob = await downloadVaultXlsxBlob(file);
-                                      triggerBlobDownload(blob, file.fileName);
-                                    } catch (err) {
-                                      showToast(
-                                        err instanceof Error ? err.message : 'Unable to download workbook.',
-                                        'error'
-                                      );
-                                    }
-                                  }}
+                                  onClick={() => openConsolidatedExportModal(dir.id, { month: 'ALL' })}
                                   className="inline-flex items-center justify-center rounded-xl bg-[#18181B] px-3 py-1.5 text-[11px] font-semibold leading-normal text-white hover:bg-slate-800 cursor-pointer"
                                 >
                                   Download
@@ -959,6 +1086,26 @@ export const AdminDashboardPage: React.FC = () => {
           onSuccess={(msg) => showToast(msg)}
         />
       )}
+
+      <ExportMonthModal
+        isOpen={exportModalOpen}
+        initialFormat="XLSX"
+        initialMode="SALES"
+        initialScope="CONSOLIDATED"
+        activeMonthCover={exportInitialMonth}
+        activeYearCover={exportInitialYear}
+        availableYears={exportAvailableYears}
+        clientSlug={exportTargetClient?.slug ?? ''}
+        clientName={exportTargetClient?.companyName ?? 'Client Directory'}
+        clientOptions={directories.map((d) => ({ id: d.id, companyName: d.companyName }))}
+        selectedClientId={exportTargetClient?.id ?? ''}
+        onChangeClient={(nextId) => void loadExportBundleForClient(nextId)}
+        loadingClientData={exportLoading}
+        salesRows={exportSalesRows}
+        purchasesRows={exportPurchasesRows}
+        onClose={() => setExportModalOpen(false)}
+        onExecuteExport={handleExecuteVaultExport}
+      />
 
       {toast && (
         <div className="fixed bottom-4 right-4 z-50 flex max-w-[calc(100vw-2rem)] items-center gap-2 rounded-xl border border-slate-800 bg-[#18181B] px-4 py-2.5 text-xs font-medium leading-normal text-white shadow-xl">

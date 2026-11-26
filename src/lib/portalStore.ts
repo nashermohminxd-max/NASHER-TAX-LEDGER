@@ -52,7 +52,7 @@ import {
   slugifyClientName,
 } from '@/utils/clientStorage';
 import { extractYearFromDate, formatTin, normalizeTinDigits } from '@/utils/taxEngine';
-import { buildFilingXlsxBlob } from '@/utils/xlsxExport';
+import { buildConsolidatedFilingXlsxBlob } from '@/utils/xlsxExport';
 
 const PORTAL_KEYS = {
   DIRECTORIES_META: 'nasher_portal_dir_meta_v1',
@@ -1274,63 +1274,93 @@ async function deleteVaultFileRecord(file: VaultXlsxFile): Promise<void> {
 }
 
 /**
- * Automatically generates and upserts (or removes if empty) a client's period
- * Sales or Expenses .xlsx workbook into Admin Storage (`ledger-vault` + `xlsx_files`).
+ * Automatically generates and upserts (or removes if empty) a client's consolidated
+ * Sales & Purchases .xlsx workbook (2 sheets: SALES and PURCHASES) into Admin Storage.
  */
-export async function syncLedgerPeriodToAdminVault(params: {
+export async function syncConsolidatedPeriodToAdminVault(params: {
   client: ClientDirectory;
-  entryKind: LedgerEntryKind;
   month: string;
   year: string;
-  rowsForPeriod: LedgerRow[];
+  salesRowsForPeriod: LedgerRow[];
+  purchasesRowsForPeriod: LedgerRow[];
   userId?: string;
   userEmail?: string;
 }): Promise<VaultXlsxFile | null> {
-  const { client, entryKind, month, year, rowsForPeriod, userId, userEmail } = params;
-  const kindLabel = entryKind === 'SALES' ? 'SALES' : 'EXPENSES';
-  const entryScope: VaultEntryScope = entryKind === 'SALES' ? 'SALES' : 'EXPENSE';
+  const {
+    client,
+    month,
+    year,
+    salesRowsForPeriod,
+    purchasesRowsForPeriod,
+    userId,
+    userEmail,
+  } = params;
+  const entryScope: VaultEntryScope = 'SLP';
   const fallbackYear = String(new Date().getFullYear());
   const cleanYear = sanitizeSegment((year || '').trim() || fallbackYear, fallbackYear);
   const cleanMonth = (month || 'GENERAL').trim().toUpperCase() || 'GENERAL';
   const taxPeriod = cleanMonth !== 'GENERAL' ? `${cleanMonth}-${cleanYear}` : cleanYear;
-  const fileName = sanitizeFilename(`${client.slug}_${kindLabel}_${cleanMonth}_${cleanYear}.xlsx`);
+  const fileName = sanitizeFilename(
+    `${client.slug}_SALES_AND_PURCHASES_${cleanMonth}_${cleanYear}.xlsx`
+  );
   const storagePath = `${sanitizeSegment(client.id, 'unassigned')}/${cleanYear}/${sanitizeSegment(
     taxPeriod,
     'GENERAL'
   )}/auto_${fileName}`;
 
   let existing: VaultXlsxFile | undefined;
+  let legacySplitFiles: VaultXlsxFile[] = [];
+
   if (!isSupabaseConfigured || !supabase) {
     ensurePreviewDirectoriesBootstrapped();
     const all = safeLoadJson<VaultXlsxFile[]>(PORTAL_KEYS.VAULT_FILES, []);
     existing = all.find(
       (f) => f.clientDirectoryId === client.id && f.storagePath === storagePath
     );
+    legacySplitFiles = all.filter(
+      (f) =>
+        f.clientDirectoryId === client.id &&
+        f.taxPeriod === taxPeriod &&
+        f.storagePath !== storagePath &&
+        f.storagePath.includes('/auto_') &&
+        (f.entryScope === 'SALES' || f.entryScope === 'EXPENSE')
+    );
   } else {
-    const { data: existingRow } = await supabase
+    const { data: periodRows } = await supabase
       .from('xlsx_files')
       .select('*')
       .eq('client_directory_id', client.id)
-      .eq('storage_path', storagePath)
-      .maybeSingle();
-    if (existingRow) {
-      existing = mapVaultFileFromDb(existingRow as Record<string, unknown>);
+      .eq('tax_period', taxPeriod);
+    const mapped = (periodRows ?? []).map((r) => mapVaultFileFromDb(r as Record<string, unknown>));
+    existing = mapped.find((f) => f.storagePath === storagePath);
+    legacySplitFiles = mapped.filter(
+      (f) =>
+        f.storagePath !== storagePath &&
+        f.storagePath.includes('/auto_') &&
+        (f.entryScope === 'SALES' || f.entryScope === 'EXPENSE')
+    );
+  }
+
+  for (const legacyFile of legacySplitFiles) {
+    try {
+      await deleteVaultFileRecord(legacyFile);
+    } catch {
+      // ignore cleanup if storage/db delete policy restricts non-admin deletion
     }
   }
 
-  if (rowsForPeriod.length === 0) {
+  const totalRows = salesRowsForPeriod.length + purchasesRowsForPeriod.length;
+  if (totalRows === 0) {
     if (!existing) return null;
     try {
       await deleteVaultFileRecord(existing);
       return null;
     } catch {
-      // Client roles in Supabase RLS may not have DELETE permission on xlsx_files/storage;
-      // fall through and overwrite the workbook with 0 data rows so Admin Storage stays accurate.
+      // fall through and overwrite workbook with 0 rows
     }
   }
 
-  const exportMode = entryKind === 'SALES' ? 'SALES' : 'PURCHASES';
-  const blob = buildFilingXlsxBlob(exportMode, rowsForPeriod);
+  const blob = buildConsolidatedFilingXlsxBlob(salesRowsForPeriod, purchasesRowsForPeriod);
   const file = new File([blob], fileName, {
     type:
       blob.type ||
@@ -1344,9 +1374,7 @@ export async function syncLedgerPeriodToAdminVault(params: {
     onProgress: () => {},
   });
 
-  const notes = `Auto-saved ${kindLabel.toLowerCase()} (${rowsForPeriod.length} row${
-    rowsForPeriod.length === 1 ? '' : 's'
-  })`;
+  const notes = `Consolidated (SALES: ${salesRowsForPeriod.length}, PURCHASES: ${purchasesRowsForPeriod.length})`;
 
   if (existing) {
     const now = new Date().toISOString();
@@ -1355,11 +1383,11 @@ export async function syncLedgerPeriodToAdminVault(params: {
       const updated: VaultXlsxFile = {
         ...existing,
         fileName,
+        entryScope,
         sizeBytes: file.size,
         taxYear: cleanYear,
         taxPeriod,
-        entryScope,
-        sheetName: preview.sheetName,
+        sheetName: preview.sheetNames.join(' & ') || preview.sheetName,
         previewHeaders: preview.headers,
         previewRows: preview.rows.slice(0, 20),
         uploadedBy: userId ?? existing.uploadedBy,
@@ -1378,11 +1406,11 @@ export async function syncLedgerPeriodToAdminVault(params: {
       .from('xlsx_files')
       .update({
         file_name: fileName,
+        entry_scope: entryScope,
         size_bytes: file.size,
         tax_year: cleanYear,
         tax_period: taxPeriod,
-        entry_scope: entryScope,
-        sheet_name: preview.sheetName ?? '',
+        sheet_name: preview.sheetNames.join(' & ') || preview.sheetName || 'SALES & PURCHASES',
         preview_headers: preview.headers,
         preview_rows: preview.rows.slice(0, 20),
         uploaded_by: userId || null,
@@ -1394,7 +1422,7 @@ export async function syncLedgerPeriodToAdminVault(params: {
       .single();
 
     if (error || !data) {
-      throw new Error(error?.message || 'Failed to update auto-saved .xlsx metadata.');
+      throw new Error(error?.message || 'Failed to update consolidated .xlsx metadata.');
     }
     return mapVaultFileFromDb(data as Record<string, unknown>);
   }
@@ -1408,7 +1436,7 @@ export async function syncLedgerPeriodToAdminVault(params: {
     taxYear: cleanYear,
     taxPeriod,
     entryScope,
-    sheetName: preview.sheetName,
+    sheetName: preview.sheetNames.join(' & ') || preview.sheetName || 'SALES & PURCHASES',
     previewHeaders: preview.headers,
     previewRows: preview.rows.slice(0, 20),
     uploadedBy: userId ?? '',
