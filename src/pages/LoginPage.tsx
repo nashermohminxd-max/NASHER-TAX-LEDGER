@@ -8,8 +8,12 @@ import {
   Loader2,
   X,
 } from 'lucide-react';
+import { z } from 'zod';
 import { useAuth } from '@/lib/authContext';
+import { AUTH_RATE_LIMIT, assertWithinRateLimit, recordRateLimitFailure } from '@/lib/rateLimit';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+
+const resetEmailSchema = z.string().trim().email('Please enter a valid email address.').max(160);
 
 const REMEMBER_EMAIL_KEY = 'npb_tax_ledger_remember_email_v1';
 
@@ -84,16 +88,28 @@ export const LoginPage: React.FC = () => {
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setResetNotice('');
-    if (!resetEmail.trim()) return;
+    const parsedEmail = resetEmailSchema.safeParse(resetEmail);
+    if (!parsedEmail.success) {
+      setResetNotice(parsedEmail.error.issues[0]?.message || 'Enter a valid email address.');
+      return;
+    }
     if (!isSupabaseConfigured || !supabase) {
       setResetNotice(
         'In local preview mode, ask your NPB CPA Administrator to assign a new password in the Admin Portal.'
       );
       return;
     }
+    const rlKey = `pw_reset:${parsedEmail.data.toLowerCase()}`;
+    try {
+      assertWithinRateLimit(rlKey, AUTH_RATE_LIMIT);
+    } catch (err) {
+      setResetNotice(err instanceof Error ? err.message : 'Too many requests.');
+      return;
+    }
     setResetBusy(true);
     try {
-      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(resetEmail.trim(), {
+      recordRateLimitFailure(rlKey, AUTH_RATE_LIMIT);
+      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(parsedEmail.data, {
         redirectTo: `${window.location.origin}/login`,
       });
       if (resetErr) throw resetErr;
@@ -134,21 +150,21 @@ export const LoginPage: React.FC = () => {
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[1000px] w-[1000px] rounded-full border border-white/25" />
 
         {/* Subtle NPB Firm Emblem Anchors on Left & Right Canvas */}
-        <div className="hidden xl:flex absolute left-10 top-10 items-center gap-3 rounded-2xl border border-white/80 bg-white/85 px-4 py-2.5 shadow-sm backdrop-blur-md">
+        <div className="hidden xl:flex absolute left-10 top-10 h-14 w-14 items-center justify-center overflow-hidden rounded-full border border-white/80 bg-white/90 shadow-sm backdrop-blur-md">
           <img
-            src="/assets/aistudio/image_e6df563a.png"
+            src="/assets/aistudio/_72398019-0A06-4C5A-A7ED-05B462ABEA26__a9cdb4ac.png"
             alt="NPB Noverben P. Bachiller, CPA Tax and Accounting Services"
             referrerPolicy="no-referrer"
-            className="h-11 w-auto object-contain"
+            className="absolute left-1/2 top-1/2 h-auto w-[113%] max-w-none -translate-x-[51.7%] -translate-y-[53%]"
           />
         </div>
 
-        <div className="hidden xl:block absolute right-12 bottom-10 rounded-2xl border border-white/75 bg-white/70 p-4 shadow-sm backdrop-blur-md">
+        <div className="hidden xl:flex absolute right-12 bottom-10 h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-white/75 bg-white/85 shadow-sm backdrop-blur-md">
           <img
-            src="/assets/aistudio/image_e6df563a.png"
+            src="/assets/aistudio/_72398019-0A06-4C5A-A7ED-05B462ABEA26__a9cdb4ac.png"
             alt="Noverben P. Bachiller, CPA"
             referrerPolicy="no-referrer"
-            className="h-20 w-auto object-contain"
+            className="absolute left-1/2 top-1/2 h-auto w-[113%] max-w-none -translate-x-[51.7%] -translate-y-[53%]"
           />
         </div>
       </div>
@@ -157,25 +173,25 @@ export const LoginPage: React.FC = () => {
       <main className="relative z-10 w-full max-w-[432px]">
         <div className="rounded-[28px] border-2 border-white/95 bg-gradient-to-b from-white/72 via-white/78 to-white/88 px-6 py-8 sm:px-9 sm:py-9 shadow-[0_24px_60px_-15px_rgba(15,35,66,0.22)] backdrop-blur-2xl">
           {/* Circular Firm Logo Emblem */}
-          <div className="mx-auto flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border border-white bg-white p-1.5 shadow-sm">
+          <div className="relative mx-auto flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border border-white bg-white shadow-sm">
             <img
-              src="/assets/aistudio/image_e6df563a.png"
+              src="/assets/aistudio/_72398019-0A06-4C5A-A7ED-05B462ABEA26__a9cdb4ac.png"
               alt="NPB CPA Logo"
               referrerPolicy="no-referrer"
-              className="h-full w-full object-contain"
+              className="absolute left-1/2 top-1/2 h-auto w-[113%] max-w-none -translate-x-[51.7%] -translate-y-[53%]"
             />
           </div>
 
           <div className="mt-4 text-center">
-            <h1 className="font-display text-2xl font-bold tracking-tight text-slate-900">
+            <h1 className="font-display text-2xl font-bold tracking-tight leading-snug text-slate-900">
               {needsFirstRunAdminSetup ? 'Create admin account' : 'Welcome back'}
             </h1>
-            <p className="mt-1 text-xs font-medium text-slate-600">
+            <p className="mt-1 text-xs font-medium leading-normal text-slate-600">
               {needsFirstRunAdminSetup
                 ? 'Set up your NPB Tax Ledger administrator credentials.'
                 : 'Please enter your details to sign in.'}
             </p>
-            <p className="mt-2 text-[11px] font-semibold text-[#0B4DA2]">
+            <p className="mt-2 text-[11px] font-semibold leading-normal text-[#0B4DA2]">
               Noverben P. Bachiller, CPA · Tax & Accounting Services
             </p>
           </div>
@@ -222,17 +238,17 @@ export const LoginPage: React.FC = () => {
             )}
 
             <div>
-              <label className="block text-xs font-semibold text-slate-800">
-                E-Mail Address
+              <label className="block text-xs font-semibold leading-normal text-slate-800">
+                Username
               </label>
               <input
-                type="email"
+                type="text"
                 required
-                autoComplete="email"
+                autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="Enter your email..."
-                className="mt-1.5 w-full rounded-xl border border-slate-400/50 bg-white/55 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#0B4DA2] focus:bg-white/90 focus:outline-none transition-colors"
+                placeholder="Enter your username..."
+                className="mt-1.5 w-full rounded-xl border border-slate-400/50 bg-white/55 px-3.5 py-2.5 text-sm leading-normal text-slate-900 placeholder:text-slate-400 focus:border-[#0B4DA2] focus:bg-white/90 focus:outline-none transition-colors"
               />
             </div>
 
@@ -249,13 +265,13 @@ export const LoginPage: React.FC = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder={needsFirstRunAdminSetup ? 'Minimum 8 characters...' : 'Enter your password...'}
-                  className="w-full rounded-xl border border-slate-400/50 bg-white/55 py-2.5 pl-3.5 pr-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#0B4DA2] focus:bg-white/90 focus:outline-none transition-colors"
+                  className="w-full rounded-xl border border-slate-400/50 bg-white/55 py-2.5 pl-3.5 pr-10 text-sm leading-normal text-slate-900 placeholder:text-slate-400 focus:border-[#0B4DA2] focus:bg-white/90 focus:outline-none transition-colors"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  className="absolute right-2.5 top-2.5 rounded-lg p-1 text-[#0B4DA2] hover:bg-white/70 cursor-pointer"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center rounded-lg p-1 text-[#0B4DA2] hover:bg-white/70 cursor-pointer"
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -263,7 +279,7 @@ export const LoginPage: React.FC = () => {
             </div>
 
             {!needsFirstRunAdminSetup && (
-              <div className="flex items-center justify-between pt-0.5 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-xs leading-normal">
                 <label className="inline-flex items-center gap-2 font-medium text-slate-800 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -271,7 +287,7 @@ export const LoginPage: React.FC = () => {
                     onChange={(e) => setRememberMe(e.target.checked)}
                     className="h-4 w-4 rounded border-slate-400 text-slate-900 focus:ring-slate-900 cursor-pointer"
                   />
-                  Remember me
+                  <span>Remember me</span>
                 </label>
 
                 <button
@@ -281,7 +297,7 @@ export const LoginPage: React.FC = () => {
                     setResetNotice('');
                     setInfoModal('FORGOT');
                   }}
-                  className="font-medium text-slate-800 underline underline-offset-2 hover:text-[#0B4DA2] cursor-pointer"
+                  className="inline-flex items-center font-medium text-slate-800 underline underline-offset-2 hover:text-[#0B4DA2] whitespace-nowrap cursor-pointer"
                 >
                   Forgot password?
                 </button>

@@ -7,18 +7,18 @@ import {
   Building2,
   CheckCircle2,
   FileSpreadsheet,
-  FolderLock,
+  KeyRound,
   LogOut,
   ShieldAlert,
   Trash2,
 } from 'lucide-react';
 import { AnalyticsDashboard } from '@/components/AnalyticsDashboard';
+import { ChangePasswordModal } from '@/components/ChangePasswordModal';
 import { EntryComposer } from '@/components/EntryComposer';
 import { ExportMonthModal, type ExportFormat } from '@/components/ExportMonthModal';
 import { LedgerTable } from '@/components/LedgerTable';
 import { MonthCoverBar } from '@/components/MonthCoverBar';
 import { PWAInstallButton } from '@/components/PWAInstallButton';
-import { XlsxVaultPanel } from '@/components/XlsxVaultPanel';
 import { useAuth } from '@/lib/authContext';
 import {
   clearLedgerRowsPeriodRemote,
@@ -37,7 +37,7 @@ import type {
   LedgerMode,
   LedgerRow,
 } from '@/types/tax';
-import { getClientStorageKeys, safeSaveJson } from '@/utils/clientStorage';
+import { getClientStorageKeys, safeLoadJson, safeSaveJson } from '@/utils/clientStorage';
 import { exportFilingCsv, importFilingCsv, triggerFileDownload } from '@/utils/csvCodec';
 import {
   FILING_MONTHS,
@@ -59,7 +59,7 @@ import {
   downloadXlsxBlob,
 } from '@/utils/xlsxExport';
 
-type WorkspaceSection = 'LEDGER' | 'VAULT' | 'ANALYTICS';
+type WorkspaceSection = 'LEDGER' | 'ANALYTICS';
 
 interface ClientWorkspaceViewProps {
   client: ClientDirectory;
@@ -83,6 +83,7 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
   const [accountTitles, setAccountTitles] = useState<string[]>([]);
   const [monthCover, setMonthCover] = useState<string>('JANUARY');
   const [yearCover, setYearCover] = useState<string>('2026');
+  const [customYears, setCustomYears] = useState<string[]>([]);
   const [autoCalcEnabled, setAutoCalcEnabled] = useState<boolean>(true);
 
   const [showComposer, setShowComposer] = useState<boolean>(true);
@@ -90,13 +91,19 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
   const [needsReviewOnly, setNeedsReviewOnly] = useState<boolean>(false);
   const [exportModalFormat, setExportModalFormat] = useState<ExportFormat | null>(null);
   const [confirmAction, setConfirmAction] = useState<'CLEAR_LEDGER' | null>(null);
+  const [showChangePassword, setShowChangePassword] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const csvInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const salesRowsRef = useRef<LedgerRow[]>([]);
   const expenseRowsRef = useRef<LedgerRow[]>([]);
+  const monthCoverRef = useRef<string>(monthCover);
+  const yearCoverRef = useRef<string>(yearCover);
   const vaultSyncChainRef = useRef<Promise<void>>(Promise.resolve());
+
+  monthCoverRef.current = monthCover;
+  yearCoverRef.current = yearCover;
 
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -109,8 +116,8 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
       fallbackMonthOverride?: string,
       fallbackYearOverride?: string
     ): { month: string; year: string } => {
-      const activeYear = fallbackYearOverride ?? yearCover;
-      const activeMonth = fallbackMonthOverride ?? monthCover;
+      const activeYear = fallbackYearOverride ?? yearCoverRef.current;
+      const activeMonth = fallbackMonthOverride ?? monthCoverRef.current;
       const fallbackYear =
         activeYear && activeYear !== 'ALL' ? activeYear : String(new Date().getFullYear());
       const fallbackMonth =
@@ -121,7 +128,7 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
       const year = getRowFilingYear(row) || fallbackYear;
       return { month, year };
     },
-    [monthCover, yearCover]
+    []
   );
 
   const syncPeriodsToAdminVault = useCallback(
@@ -166,6 +173,9 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
     [client, resolveRowPeriod, user?.id, user?.email]
   );
 
+  const syncPeriodsRef = useRef(syncPeriodsToAdminVault);
+  syncPeriodsRef.current = syncPeriodsToAdminVault;
+
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -174,11 +184,14 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
         if (!active) return;
         salesRowsRef.current = bundle.salesRows;
         expenseRowsRef.current = bundle.expenseRows;
+        monthCoverRef.current = bundle.monthCover;
+        yearCoverRef.current = bundle.yearCover;
         setSalesRows(bundle.salesRows);
         setExpenseRows(bundle.expenseRows);
         setAccountTitles(bundle.accountTitles);
         setMonthCover(bundle.monthCover);
         setYearCover(bundle.yearCover);
+        setCustomYears(safeLoadJson<string[]>(`${client.id}_custom_years_v1`, []));
         setEditingRow(null);
         setNeedsReviewOnly(false);
 
@@ -203,7 +216,7 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                 return !hasAutoFile('SALES', p.month, p.year);
               });
               if (missingSales.length > 0) {
-                await syncPeriodsToAdminVault(
+                await syncPeriodsRef.current(
                   'SALES',
                   bundle.salesRows,
                   missingSales,
@@ -217,7 +230,7 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                 return !hasAutoFile('EXPENSE', p.month, p.year);
               });
               if (missingExpenses.length > 0) {
-                await syncPeriodsToAdminVault(
+                await syncPeriodsRef.current(
                   'EXPENSE',
                   bundle.expenseRows,
                   missingExpenses,
@@ -241,22 +254,30 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
     return () => {
       active = false;
     };
-  }, [client.id, resolveRowPeriod, showToast, syncPeriodsToAdminVault]);
+  }, [client.id, resolveRowPeriod, showToast]);
 
   useEffect(() => {
+    if (loading) return;
     const keys = getClientStorageKeys(client.id);
     safeSaveJson(keys.MONTH_COVER, monthCover);
-  }, [client.id, monthCover]);
+  }, [client.id, monthCover, loading]);
 
   useEffect(() => {
+    if (loading) return;
     const keys = getClientStorageKeys(client.id);
     safeSaveJson(keys.YEAR_COVER, yearCover);
-  }, [client.id, yearCover]);
+  }, [client.id, yearCover, loading]);
 
   useEffect(() => {
+    if (loading) return;
     const keys = getClientStorageKeys(client.id);
     safeSaveJson(keys.ACCOUNT_TITLES, accountTitles);
-  }, [client.id, accountTitles]);
+  }, [client.id, accountTitles, loading]);
+
+  useEffect(() => {
+    if (loading) return;
+    safeSaveJson(`${client.id}_custom_years_v1`, customYears);
+  }, [client.id, customYears, loading]);
 
   const taxMode: LedgerMode = ledgerTab === 'SALES' ? 'SALES' : 'PURCHASES';
 
@@ -290,9 +311,15 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
   );
 
   const availableYears = useMemo(
-    () => collectAvailableYears([...salesRows, ...expenseRows]),
-    [salesRows, expenseRows]
+    () => collectAvailableYears([...salesRows, ...expenseRows], customYears),
+    [salesRows, expenseRows, customYears]
   );
+
+  const handleAddYear = useCallback((year: string) => {
+    const clean = year.trim();
+    if (!/^\d{4}$/.test(clean)) return;
+    setCustomYears((prev) => (prev.includes(clean) ? prev : [...prev, clean]));
+  }, []);
 
   const monthlySalesRows = useMemo(
     () => salesRows.filter((r) => rowMatchesPeriod(r, monthCover, yearCover)),
@@ -472,6 +499,11 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
   const handleCsvImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('CSV file exceeds the 10 MB size limit.', 'error');
+      e.target.value = '';
+      return;
+    }
     try {
       const text = await file.text();
       const result = importFilingCsv(text, taxMode);
@@ -573,15 +605,6 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
       icon: <BookOpen className="h-4 w-4" />,
       badge: salesRows.length + expenseRows.length,
     },
-    ...(isAdminMode
-      ? [
-          {
-            id: 'VAULT' as WorkspaceSection,
-            label: '.XLSX Vault',
-            icon: <FolderLock className="h-4 w-4" />,
-          },
-        ]
-      : []),
     {
       id: 'ANALYTICS',
       label: 'Monthly Analytics',
@@ -596,19 +619,19 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
         <div className="px-5 py-4 border-b border-slate-200/70">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200/80 bg-white p-1 shadow-2xs">
+              <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-slate-200/80 bg-white shadow-2xs">
                 <img
-                  src="/assets/aistudio/image_e6df563a.png"
+                  src="/assets/aistudio/_72398019-0A06-4C5A-A7ED-05B462ABEA26__a9cdb4ac.png"
                   alt="NPB CPA"
                   referrerPolicy="no-referrer"
-                  className="h-full w-full object-contain"
+                  className="absolute left-1/2 top-1/2 h-auto w-[113%] max-w-none -translate-x-[51.7%] -translate-y-[53%]"
                 />
               </div>
-              <div className="min-w-0">
-                <span className="block font-display text-sm font-extrabold tracking-tight text-slate-900 truncate">
+              <div className="min-w-0 flex-1">
+                <span className="block font-display text-sm font-extrabold tracking-tight leading-normal text-slate-900 truncate">
                   NPB TAX LEDGER
                 </span>
-                <span className="block text-[11px] font-medium text-[#0B4DA2]">
+                <span className="block text-[11px] font-medium leading-normal text-[#0B4DA2]">
                   {client.taxClassification === 'VAT' ? 'VAT (12%) · ' : 'Non-VAT · '}
                   {isAdminMode ? 'Audit' : 'Client'}
                 </span>
@@ -617,14 +640,14 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
           </div>
 
           <div className="mt-3.5 rounded-xl bg-[#F4F8FD]/90 p-3 border border-[#D4E4F7]">
-            <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#0B4DA2]">
-              <Building2 className="h-3 w-3" />
-              {isAdminMode ? 'Admin Audit View' : 'Assigned Directory'}
+            <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider leading-normal text-[#0B4DA2]">
+              <Building2 className="h-3 w-3 shrink-0" />
+              <span>{isAdminMode ? 'Admin Audit View' : 'Assigned Directory'}</span>
             </div>
-            <div className="mt-1 font-display text-xs font-bold text-slate-900 truncate">
+            <div className="mt-1 font-display text-xs font-bold leading-normal text-slate-900 break-words">
               {client.companyName}
             </div>
-            <div className="mt-0.5 font-mono text-[11px] text-slate-500 truncate">
+            <div className="mt-0.5 font-mono text-[11px] leading-normal text-slate-500 break-words">
               TIN: {client.tin || 'Unset'} {client.rdoCode ? `· RDO ${client.rdoCode}` : ''}
             </div>
           </div>
@@ -633,10 +656,10 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
             <button
               type="button"
               onClick={onBackToAdmin}
-              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/85 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white hover:text-[#0B4DA2] transition-colors cursor-pointer"
+              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/85 px-3 py-2 text-xs font-semibold leading-normal text-slate-700 hover:bg-white hover:text-[#0B4DA2] transition-colors cursor-pointer"
             >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Back to Admin Directory
+              <ArrowLeft className="h-3.5 w-3.5 shrink-0" />
+              <span>Back to Admin Directory</span>
             </button>
           )}
         </div>
@@ -649,19 +672,19 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                 key={item.id}
                 type="button"
                 onClick={() => setSection(item.id)}
-                className={`flex items-center justify-between gap-2.5 rounded-xl px-3 py-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`flex items-center justify-between gap-2.5 rounded-xl px-3 py-2.5 text-xs font-semibold leading-normal transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   active
                     ? 'bg-[#E7F0FC] text-[#0B4DA2]'
                     : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
                 }`}
               >
-                <span className="flex items-center gap-2.5">
+                <span className="inline-flex items-center gap-2.5">
                   {item.icon}
-                  {item.label}
+                  <span>{item.label}</span>
                 </span>
                 {item.badge !== undefined && (
                   <span
-                    className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] ${
+                    className={`inline-flex items-center justify-center rounded-md px-1.5 py-0.5 font-mono text-[10px] leading-normal ${
                       active ? 'bg-white text-[#0B4DA2]' : 'bg-slate-100 text-slate-500'
                     }`}
                   >
@@ -673,20 +696,32 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
           })}
         </nav>
 
-        <div className="hidden lg:block border-t border-slate-200/70 p-4 space-y-3">
-          <div className="text-[11px] text-slate-500">
-            <div className="font-semibold text-slate-800 truncate">{user?.email}</div>
-            <div className="uppercase tracking-wider text-[10px] font-medium text-[#0B4DA2]">
+        <div className="hidden lg:block border-t border-slate-200/70 p-4 space-y-2.5">
+          <div className="min-w-0 text-[11px] leading-normal text-slate-500">
+            <div className="font-semibold text-slate-800 truncate leading-normal" title={user?.email}>
+              {user?.email}
+            </div>
+            <div className="uppercase tracking-wider text-[10px] font-medium leading-normal text-[#0B4DA2]">
               Role: {user?.role}
             </div>
           </div>
+          {!isAdminMode && user && (
+            <button
+              type="button"
+              onClick={() => setShowChangePassword(true)}
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/80 px-3 py-2 text-xs font-medium leading-normal text-slate-700 hover:bg-white hover:text-[#0B4DA2] transition-colors cursor-pointer"
+            >
+              <KeyRound className="h-3.5 w-3.5 shrink-0" />
+              <span>Change Password</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void signOut()}
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/80 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-white hover:text-slate-900 transition-colors cursor-pointer"
+            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/80 px-3 py-2 text-xs font-medium leading-normal text-slate-700 hover:bg-white hover:text-slate-900 transition-colors cursor-pointer"
           >
-            <LogOut className="h-3.5 w-3.5" />
-            Sign Out
+            <LogOut className="h-3.5 w-3.5 shrink-0" />
+            <span>Sign Out</span>
           </button>
         </div>
       </aside>
@@ -696,45 +731,53 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
         {/* Frosted Top Action Bar */}
         <header className="sticky top-0 z-30 border-b border-white/90 bg-white/70 backdrop-blur-2xl px-4 py-3.5 sm:px-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="font-display text-base font-bold text-slate-900">
+            <div className="min-w-0 flex-1">
+              <h1 className="font-display text-base font-bold leading-snug text-slate-900">
                 {section === 'LEDGER' && 'BIR Sales & Expenses Ledger'}
-                {section === 'VAULT' && 'Encrypted Client .XLSX Storage Vault'}
                 {section === 'ANALYTICS' && 'Monthly Tax & Cashflow Analytics'}
               </h1>
-              <p className="text-xs text-slate-500">
-                {client.companyName} · Tenant ID <span className="font-mono">{client.id}</span>
-              </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <PWAInstallButton />
               <button
                 type="button"
                 onClick={() => setExportModalFormat('XLSX')}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#18181B] px-4 py-2 text-xs font-semibold text-white shadow-2xs hover:bg-slate-800 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#18181B] px-4 py-2 text-xs font-semibold leading-normal text-white shadow-2xs hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <FileSpreadsheet className="h-3.5 w-3.5" />
-                Export Month (.xlsx)
+                <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
+                <span>Export Month (.xlsx)</span>
               </button>
+              {!isAdminMode && user && (
+                <button
+                  type="button"
+                  onClick={() => setShowChangePassword(true)}
+                  aria-label="Change Password"
+                  title="Change Password"
+                  className="lg:hidden inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white/85 px-3 py-2 text-xs font-semibold leading-normal text-slate-700 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <KeyRound className="h-3.5 w-3.5 shrink-0" />
+                  <span>Password</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void signOut()}
-                className="lg:hidden inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white/85 px-3 py-2 text-xs font-semibold text-slate-700"
+                className="lg:hidden inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white/85 px-3 py-2 text-xs font-semibold leading-normal text-slate-700 whitespace-nowrap shrink-0"
               >
-                <LogOut className="h-3.5 w-3.5" />
-                Sign Out
+                <LogOut className="h-3.5 w-3.5 shrink-0" />
+                <span>Sign Out</span>
               </button>
             </div>
           </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6 space-y-5 max-w-[1440px] w-full mx-auto">
+        <main className="flex-1 p-4 sm:p-6 space-y-5 max-w-[1440px] w-full mx-auto min-w-0">
           {isAdminMode && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#BBD6F2] bg-[#EBF3FC]/85 backdrop-blur-md px-4 py-2.5 text-xs text-slate-800">
-              <div className="flex items-center gap-2 font-medium">
-                <ShieldAlert className="h-4 w-4 text-[#0B4DA2] shrink-0" />
-                <span>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#BBD6F2] bg-[#EBF3FC]/85 backdrop-blur-md px-4 py-2.5 text-xs leading-normal text-slate-800">
+              <div className="flex items-start sm:items-center gap-2 font-medium min-w-0">
+                <ShieldAlert className="h-4 w-4 text-[#0B4DA2] shrink-0 mt-0.5 sm:mt-0" />
+                <span className="break-words">
                   <strong>Admin Audit Mode:</strong> Inspecting{' '}
                   <strong>{client.companyName}</strong>. You can approve/flag entries, edit rows,
                   or manage their .xlsx vault.
@@ -753,46 +796,46 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                 <div className="space-y-5">
                   {/* Live BIR Summary Cards (Sales, Purchases, Net VAT Payable, EWT) */}
                   <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    <div className="min-w-0 rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold uppercase tracking-wide leading-normal text-slate-500 truncate">
                           Total Sales ({monthCover})
                         </span>
-                        <span className="text-[11px] font-mono text-[#0B4DA2]">
+                        <span className="text-[11px] tabular-nums-mono leading-normal text-[#0B4DA2] whitespace-nowrap shrink-0">
                           {monthlySalesRows.length} rows
                         </span>
                       </div>
-                      <div className="mt-1.5 font-mono text-xl font-bold text-slate-900">
+                      <div className="mt-1.5 tabular-nums-mono text-xl font-bold leading-normal text-slate-900 break-words">
                         ₱{formatAccounting(salesSummary.total) === '-' ? '0.00' : formatAccounting(salesSummary.total)}
                       </div>
-                      <div className="mt-1 text-[11px] text-slate-500 font-mono">
+                      <div className="mt-1 text-[11px] leading-normal text-slate-500 tabular-nums-mono break-words">
                         Output VAT: ₱{formatAccounting(salesSummary.vat) === '-' ? '0.00' : formatAccounting(salesSummary.vat)}
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    <div className="min-w-0 rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold uppercase tracking-wide leading-normal text-slate-500 truncate">
                           Total Expenses ({monthCover})
                         </span>
-                        <span className="text-[11px] font-mono text-slate-500">
+                        <span className="text-[11px] tabular-nums-mono leading-normal text-slate-500 whitespace-nowrap shrink-0">
                           {monthlyExpenseRows.length} rows
                         </span>
                       </div>
-                      <div className="mt-1.5 font-mono text-xl font-bold text-slate-900">
+                      <div className="mt-1.5 tabular-nums-mono text-xl font-bold leading-normal text-slate-900 break-words">
                         ₱{formatAccounting(expensesSummary.total) === '-' ? '0.00' : formatAccounting(expensesSummary.total)}
                       </div>
-                      <div className="mt-1 text-[11px] text-slate-500 font-mono">
+                      <div className="mt-1 text-[11px] leading-normal text-slate-500 tabular-nums-mono break-words">
                         Input VAT: ₱{formatAccounting(expensesSummary.vat) === '-' ? '0.00' : formatAccounting(expensesSummary.vat)}
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-[#BBD6F2] bg-[#EBF3FC]/85 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.12)]">
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-[#0B4DA2]">
+                    <div className="min-w-0 rounded-2xl border border-[#BBD6F2] bg-[#EBF3FC]/85 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.12)]">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide leading-normal text-[#0B4DA2]">
                         Net VAT Payable (Out - In)
                       </div>
                       <div
-                        className={`mt-1.5 font-mono text-xl font-bold ${
+                        className={`mt-1.5 tabular-nums-mono text-xl font-bold leading-normal break-words ${
                           netVatPayable < 0 ? 'text-emerald-700' : 'text-[#0B4DA2]'
                         }`}
                       >
@@ -801,7 +844,7 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                           ? '0.00'
                           : formatAccounting(Math.abs(netVatPayable))}
                       </div>
-                      <div className="mt-1 text-[11px] text-slate-600">
+                      <div className="mt-1 text-[11px] leading-normal text-slate-600">
                         {client.taxClassification === 'NON_VAT'
                           ? 'Non-VAT Taxpayer (Percentage Tax Basis)'
                           : netVatPayable < 0
@@ -810,11 +853,11 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    <div className="min-w-0 rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide leading-normal text-slate-500">
                         Withholding Taxes (EWT)
                       </div>
-                      <div className="mt-1.5 font-mono text-xl font-bold text-slate-900">
+                      <div className="mt-1.5 tabular-nums-mono text-xl font-bold leading-normal text-slate-900 break-words">
                         ₱
                         {formatAccounting(
                           round2(salesSummary.totalWithholding + expensesSummary.totalWithholding)
@@ -824,7 +867,7 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                               round2(salesSummary.totalWithholding + expensesSummary.totalWithholding)
                             )}
                       </div>
-                      <div className="mt-1 text-[11px] text-slate-500 font-mono">
+                      <div className="mt-1 text-[11px] leading-normal text-slate-500 tabular-nums-mono break-words">
                         Sales CWT: ₱{formatAccounting(salesSummary.totalWithholding) === '-' ? '0.00' : formatAccounting(salesSummary.totalWithholding)}
                       </div>
                     </div>
@@ -890,11 +933,16 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                     onChangeMonthCover={(m) => {
                       setMonthCover(m);
                       setEditingRow(null);
+                      setNeedsReviewOnly(false);
+                      setShowComposer(true);
                     }}
                     onChangeYearCover={(y) => {
                       setYearCover(y);
                       setEditingRow(null);
+                      setNeedsReviewOnly(false);
+                      setShowComposer(true);
                     }}
+                    onAddYear={handleAddYear}
                   />
 
                   {/* Fast BIR Encoder */}
@@ -906,7 +954,15 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                         modeLabel={ledgerTab === 'EXPENSE' ? 'EXPENSES' : 'SALES'}
                         coveredMonth={monthCover}
                         coveredYear={yearCover}
+                        onChangeCoveredMonth={setMonthCover}
+                        onChangeCoveredYear={(yr) => {
+                          if (!availableYears.includes(yr)) {
+                            handleAddYear(yr);
+                          }
+                          setYearCover(yr);
+                        }}
                         accountTitles={accountTitles}
+                        knownRows={taxMode === 'SALES' ? salesRows : expenseRows}
                         onUpdateAccountTitles={setAccountTitles}
                         autoCalcEnabled={autoCalcEnabled}
                         onToggleAutoCalc={setAutoCalcEnabled}
@@ -949,14 +1005,6 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                 </div>
               )}
 
-              {isAdminMode && section === 'VAULT' && (
-                <XlsxVaultPanel
-                  client={client}
-                  isAdminMode={isAdminMode}
-                  onNotify={showToast}
-                />
-              )}
-
               {section === 'ANALYTICS' && (
                 <div className="space-y-4">
                   <MonthCoverBar
@@ -968,6 +1016,7 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
                     otherModeRows={ledgerTab === 'SALES' ? expenseRows : salesRows}
                     onChangeMonthCover={setMonthCover}
                     onChangeYearCover={setYearCover}
+                    onAddYear={handleAddYear}
                   />
                   <AnalyticsDashboard
                     activeMode={taxMode}
@@ -1035,15 +1084,25 @@ export const ClientWorkspaceView: React.FC<ClientWorkspaceViewProps> = ({
         </div>
       )}
 
+      {!isAdminMode && user && (
+        <ChangePasswordModal
+          isOpen={showChangePassword}
+          userId={user.id}
+          usernameLabel={user.email}
+          onClose={() => setShowChangePassword(false)}
+          onSuccess={(msg) => showToast(msg)}
+        />
+      )}
+
       {/* Toast */}
       {toast && (
-        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-xl border border-slate-800 bg-[#18181B] px-4 py-2.5 text-xs font-medium text-white shadow-xl">
+        <div className="fixed bottom-4 right-4 z-50 flex max-w-[calc(100vw-2rem)] items-center gap-2 rounded-xl border border-slate-800 bg-[#18181B] px-4 py-2.5 text-xs font-medium leading-normal text-white shadow-xl">
           {toast.type === 'error' ? (
             <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
           ) : (
             <CheckCircle2 className="h-4 w-4 text-sky-400 shrink-0" />
           )}
-          <span>{toast.message}</span>
+          <span className="break-words">{toast.message}</span>
         </div>
       )}
     </div>

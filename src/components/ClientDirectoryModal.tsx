@@ -11,6 +11,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import { clientWorkspaceBackupSchema, stripDangerousKeysDeep } from '../lib/validation';
 import type { ClientProfile, ClientWorkspaceBackup } from '../types/tax';
 import {
   buildClientWorkspaceBackup,
@@ -100,15 +101,21 @@ export const ClientDirectoryModal: React.FC<ClientDirectoryModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setStatusError('');
+    if (file.size > 10 * 1024 * 1024) {
+      setStatusError('Backup file exceeds the 10 MB size limit.');
+      e.target.value = '';
+      return;
+    }
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text) as ClientWorkspaceBackup;
-      if (!parsed || !parsed.client || !Array.isArray(parsed.salesRows) || !Array.isArray(parsed.purchasesRows)) {
-        setStatusError('Invalid client directory backup file.');
+      const raw = stripDangerousKeysDeep(JSON.parse(text));
+      const result = clientWorkspaceBackupSchema.safeParse(raw);
+      if (!result.success) {
+        setStatusError(result.error.issues[0]?.message || 'Invalid client directory backup file.');
         e.target.value = '';
         return;
       }
-      onImportClientBackup(parsed);
+      onImportClientBackup(result.data as ClientWorkspaceBackup);
     } catch {
       setStatusError('Could not read client backup JSON file.');
     }

@@ -1,6 +1,22 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-export const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL ?? '').trim();
+function validateSupabaseUrl(rawUrl: string): string {
+  const trimmed = (rawUrl ?? '').trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    const isLocalhost =
+      parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+    if (parsed.protocol === 'https:' || (isLocalhost && parsed.protocol === 'http:')) {
+      return parsed.origin;
+    }
+  } catch {
+    // invalid URL
+  }
+  return '';
+}
+
+export const supabaseUrl = validateSupabaseUrl(import.meta.env.VITE_SUPABASE_URL ?? '');
 export const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);

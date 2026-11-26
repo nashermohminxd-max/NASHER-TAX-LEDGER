@@ -115,6 +115,7 @@ export interface SplitLineDraft {
   key: string;
   category: TransactionCategory;
   taxStatus: TaxStatus;
+  rawNonVat: string;
   rawAmount: string;
   applyGovtVat5: boolean;
   manualOverride: boolean;

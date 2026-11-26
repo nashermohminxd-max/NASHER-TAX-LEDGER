@@ -6,6 +6,7 @@ import {
   Building2,
   CheckCircle2,
   Eye,
+  EyeOff,
   FileSpreadsheet,
   FolderPlus,
   HardDrive,
@@ -18,9 +19,9 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { ChangePasswordModal } from '@/components/ChangePasswordModal';
 import { ClientWorkspaceView } from '@/components/ClientWorkspaceView';
 import { useAuth } from '@/lib/authContext';
-import { generateTempPassword } from '@/lib/crypto';
 import {
   assignClientLoginCredentials,
   createClientDirectoryWithCredentials,
@@ -33,14 +34,11 @@ import { downloadVaultXlsxBlob, formatFileSize, triggerBlobDownload } from '@/li
 import type { ClientDirectory, TaxClassification, VaultXlsxFile } from '@/types/portal';
 import { formatTin } from '@/utils/taxEngine';
 
-type AdminTab = 'DIRECTORIES' | 'VAULT';
-
 export const AdminDashboardPage: React.FC = () => {
   const { user, signOut, isSupabaseMode } = useAuth();
   const navigate = useNavigate();
   const { clientId } = useParams<{ clientId?: string }>();
 
-  const [tab, setTab] = useState<AdminTab>('DIRECTORIES');
   const [directories, setDirectories] = useState<ClientDirectory[]>([]);
   const [vaultFiles, setVaultFiles] = useState<VaultXlsxFile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,7 +58,8 @@ export const AdminDashboardPage: React.FC = () => {
   const [newTaxClass, setNewTaxClass] = useState<TaxClassification>('VAT');
   const [assignLogin, setAssignLogin] = useState(true);
   const [newEmail, setNewEmail] = useState('');
-  const [newPassword, setNewPassword] = useState(() => generateTempPassword(12));
+  const [newPassword, setNewPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
   const [includeSampleRows, setIncludeSampleRows] = useState(false);
   const [creating, setCreating] = useState(false);
 
@@ -68,7 +67,9 @@ export const AdminDashboardPage: React.FC = () => {
   const [credTarget, setCredTarget] = useState<ClientDirectory | null>(null);
   const [credEmail, setCredEmail] = useState('');
   const [credPassword, setCredPassword] = useState('');
+  const [showCredPassword, setShowCredPassword] = useState(false);
   const [savingCred, setSavingCred] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   // Delete confirmation modal
   const [deleteTarget, setDeleteTarget] = useState<ClientDirectory | null>(null);
@@ -165,7 +166,8 @@ export const AdminDashboardPage: React.FC = () => {
       setNewTin('');
       setNewRdo('');
       setNewEmail('');
-      setNewPassword(generateTempPassword(12));
+      setNewPassword('');
+      setShowNewPassword(false);
       showToast(credentialNotice || `Created ${directory.companyName} directory.`);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Unable to create client.', 'error');
@@ -183,7 +185,7 @@ export const AdminDashboardPage: React.FC = () => {
         clientDirectoryId: credTarget.id,
         companyName: credTarget.companyName,
         email: credEmail,
-        password: credPassword,
+        password: credPassword || undefined,
       });
       setDirectories((prev) =>
         prev.map((d) =>
@@ -191,7 +193,7 @@ export const AdminDashboardPage: React.FC = () => {
         )
       );
       setCredTarget(null);
-      showToast(notice || `Assigned login credentials for ${credTarget.companyName}.`);
+      showToast(notice || `Updated login credentials for ${credTarget.companyName}.`);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Unable to assign credentials.', 'error');
     } finally {
@@ -272,11 +274,11 @@ export const AdminDashboardPage: React.FC = () => {
                 className="h-full w-full object-contain"
               />
             </div>
-            <div className="min-w-0">
-              <span className="block font-display text-sm font-extrabold tracking-tight text-slate-900 truncate">
-                NPB TAX LEDGER
+            <div className="min-w-0 flex-1 flex flex-col justify-center text-center">
+              <span className="block font-display text-sm font-extrabold tracking-tight leading-snug text-slate-900">
+                NPB LEDGER
               </span>
-              <span className="block text-[11px] font-medium text-[#0B4DA2]">
+              <span className="block text-[11px] font-medium leading-normal text-[#0B4DA2]">
                 Admin Console
               </span>
             </div>
@@ -284,65 +286,45 @@ export const AdminDashboardPage: React.FC = () => {
         </div>
 
         <nav className="flex lg:flex-col gap-1 overflow-x-auto p-3 flex-1">
-          <button
-            type="button"
-            onClick={() => setTab('DIRECTORIES')}
-            className={`flex items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              tab === 'DIRECTORIES'
-                ? 'bg-[#E7F0FC] text-[#0B4DA2]'
-                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-            }`}
+          <div
+            className="flex items-center justify-between gap-2 rounded-xl bg-[#E7F0FC] px-3 py-2.5 text-xs font-semibold text-[#0B4DA2] whitespace-nowrap shrink-0"
           >
             <span className="flex items-center gap-2.5">
-              <Users className="h-4 w-4" />
+              <Users className="h-4 w-4 shrink-0" />
               Client Directories
             </span>
-            <span
-              className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] ${
-                tab === 'DIRECTORIES' ? 'bg-white text-[#0B4DA2]' : 'bg-slate-100 text-slate-500'
-              }`}
-            >
+            <span className="rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px] text-[#0B4DA2]">
               {directories.length}
             </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setTab('VAULT')}
-            className={`flex items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              tab === 'VAULT'
-                ? 'bg-[#E7F0FC] text-[#0B4DA2]'
-                : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-            }`}
-          >
-            <span className="flex items-center gap-2.5">
-              <HardDrive className="h-4 w-4" />
-              Global .XLSX Vault
-            </span>
-            <span
-              className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] ${
-                tab === 'VAULT' ? 'bg-white text-[#0B4DA2]' : 'bg-slate-100 text-slate-500'
-              }`}
-            >
-              {vaultFiles.length}
-            </span>
-          </button>
+          </div>
         </nav>
 
-        <div className="hidden lg:block border-t border-slate-200/70 p-4 space-y-3">
-          <div className="text-[11px] text-slate-500">
-            <div className="font-semibold text-slate-800 truncate">{user?.email}</div>
-            <div className="text-[10px] font-medium text-[#0B4DA2]">
+        <div className="hidden lg:block border-t border-slate-200/70 p-4 space-y-2.5">
+          <div className="min-w-0 text-[11px] leading-normal text-slate-500">
+            <div className="font-semibold text-slate-800 truncate leading-normal" title={user?.email}>
+              {user?.email}
+            </div>
+            <div className="text-[10px] font-medium leading-normal text-[#0B4DA2]">
               {isSupabaseMode ? 'Cloud Session' : 'Preview Admin'}
             </div>
           </div>
+          {user && (
+            <button
+              type="button"
+              onClick={() => setShowChangePassword(true)}
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/80 px-3 py-2 text-xs font-medium leading-normal text-slate-700 hover:bg-white hover:text-[#0B4DA2] transition-colors cursor-pointer"
+            >
+              <KeyRound className="h-3.5 w-3.5 shrink-0" />
+              <span>Change Password</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void signOut()}
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/80 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-white hover:text-slate-900 transition-colors cursor-pointer"
+            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/80 px-3 py-2 text-xs font-medium leading-normal text-slate-700 hover:bg-white hover:text-slate-900 transition-colors cursor-pointer"
           >
-            <LogOut className="h-3.5 w-3.5" />
-            Sign Out
+            <LogOut className="h-3.5 w-3.5 shrink-0" />
+            <span>Sign Out</span>
           </button>
         </div>
       </aside>
@@ -351,31 +333,42 @@ export const AdminDashboardPage: React.FC = () => {
       <div className="flex-1 flex flex-col min-w-0">
         <header className="sticky top-0 z-30 border-b border-white/90 bg-white/70 backdrop-blur-2xl px-4 py-3.5 sm:px-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="font-display text-base font-bold text-slate-900">
-                {tab === 'DIRECTORIES' && 'Master Client Directory'}
-                {tab === 'VAULT' && 'Cross-Client .XLSX Storage Vault'}
+            <div className="min-w-0 flex-1">
+              <h1 className="font-display text-base font-bold leading-snug text-slate-900">
+                Master Client Directory
               </h1>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs leading-normal text-slate-500 break-words">
                 Manage isolated taxpayer directories, client credentials, and workbook vaults.
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setShowCreateModal(true)}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#18181B] px-4 py-2 text-xs font-semibold text-white shadow-2xs hover:bg-slate-800 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#18181B] px-4 py-2 text-xs font-semibold leading-normal text-white shadow-2xs hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <FolderPlus className="h-3.5 w-3.5" />
-                New Client Directory
+                <FolderPlus className="h-3.5 w-3.5 shrink-0" />
+                <span>New Client Directory</span>
               </button>
+              {user && (
+                <button
+                  type="button"
+                  onClick={() => setShowChangePassword(true)}
+                  aria-label="Change Password"
+                  title="Change Password"
+                  className="lg:hidden inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white/85 px-3 py-2 text-xs font-semibold leading-normal text-slate-700 shrink-0"
+                >
+                  <KeyRound className="h-3.5 w-3.5 shrink-0" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void signOut()}
-                className="lg:hidden inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white/85 px-3 py-2 text-xs font-semibold text-slate-700"
+                aria-label="Sign Out"
+                className="lg:hidden inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white/85 px-3 py-2 text-xs font-semibold leading-normal text-slate-700 shrink-0"
               >
-                <LogOut className="h-3.5 w-3.5" />
+                <LogOut className="h-3.5 w-3.5 shrink-0" />
               </button>
             </div>
           </div>
@@ -432,24 +425,23 @@ export const AdminDashboardPage: React.FC = () => {
             </div>
           </div>
 
-          {tab === 'DIRECTORIES' && (
-            <div className="overflow-hidden rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
+          <div className="overflow-hidden rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/70 px-5 py-3.5">
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                  <div className="relative w-full sm:w-auto min-w-0">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                     <input
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       placeholder="Search company, TIN, RDO, email..."
-                      className="w-64 rounded-xl border border-slate-300/80 bg-white/85 py-1.5 pl-8 pr-3 text-xs text-slate-900 focus:border-[#0B4DA2] focus:bg-white focus:outline-none"
+                      className="w-full sm:w-64 rounded-xl border border-slate-300/80 bg-white/85 py-1.5 pl-8 pr-3 text-xs leading-normal text-slate-900 focus:border-[#0B4DA2] focus:bg-white focus:outline-none"
                     />
                   </div>
                   <select
                     value={taxFilter}
                     onChange={(e) => setTaxFilter(e.target.value as 'ALL' | TaxClassification)}
-                    className="rounded-xl border border-slate-300/80 bg-white/85 px-3 py-1.5 text-xs font-medium text-slate-800 focus:border-[#0B4DA2] focus:outline-none"
+                    className="rounded-xl border border-slate-300/80 bg-white/85 px-3 py-1.5 text-xs font-medium leading-normal text-slate-800 focus:border-[#0B4DA2] focus:outline-none"
                   >
                     <option value="ALL">All Classifications</option>
                     <option value="VAT">VAT Registered</option>
@@ -495,23 +487,23 @@ export const AdminDashboardPage: React.FC = () => {
                         );
                         return (
                           <tr key={dir.id} className="hover:bg-[#F5F9FE]/80 transition-colors">
-                            <td className="px-4 py-3.5">
-                              <div className="font-display font-bold text-slate-900">
+                            <td className="px-4 py-3.5 max-w-[260px]">
+                              <div className="font-display font-bold leading-normal text-slate-900 break-words">
                                 {dir.companyName}
                               </div>
                               {dir.tradeName && (
-                                <div className="text-[11px] text-slate-500">{dir.tradeName}</div>
+                                <div className="text-[11px] leading-normal text-slate-500 break-words">{dir.tradeName}</div>
                               )}
                             </td>
-                            <td className="px-3 py-3.5 whitespace-nowrap font-mono text-slate-700">
-                              <div>{dir.tin || 'No TIN'}</div>
-                              <div className="text-[10px] text-slate-400">
+                            <td className="px-3 py-3.5 whitespace-nowrap tabular-nums-mono text-slate-700">
+                              <div className="leading-normal">{dir.tin || 'No TIN'}</div>
+                              <div className="text-[10px] leading-normal text-slate-400">
                                 RDO: {dir.rdoCode || '—'}
                               </div>
                             </td>
                             <td className="px-3 py-3.5 whitespace-nowrap">
                               <span
-                                className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold ${
+                                className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold leading-normal ${
                                   dir.taxClassification === 'VAT'
                                     ? 'bg-[#E7F0FC] text-[#0B4DA2]'
                                     : 'bg-slate-100 text-slate-700'
@@ -520,11 +512,11 @@ export const AdminDashboardPage: React.FC = () => {
                                 {dir.taxClassification === 'VAT' ? 'VAT (12%)' : 'NON-VAT'}
                               </span>
                             </td>
-                            <td className="px-3 py-3.5 whitespace-nowrap">
+                            <td className="px-3 py-3.5 max-w-[240px]">
                               {dir.assignedEmail ? (
-                                <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-slate-700">
-                                  <ShieldCheck className="h-3.5 w-3.5 text-[#0B4DA2]" />
-                                  {dir.assignedEmail}
+                                <span className="inline-flex items-center gap-1.5 font-mono text-[11px] leading-normal text-slate-700 break-all">
+                                  <ShieldCheck className="h-3.5 w-3.5 text-[#0B4DA2] shrink-0" />
+                                  <span>{dir.assignedEmail}</span>
                                 </span>
                               ) : (
                                 <button
@@ -532,19 +524,20 @@ export const AdminDashboardPage: React.FC = () => {
                                   onClick={() => {
                                     setCredTarget(dir);
                                     setCredEmail('');
-                                    setCredPassword(generateTempPassword(12));
+                                    setCredPassword('');
+                                    setShowCredPassword(false);
                                   }}
-                                  className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100 cursor-pointer"
+                                  className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold leading-normal text-amber-900 hover:bg-amber-100 whitespace-nowrap cursor-pointer"
                                 >
-                                  <KeyRound className="h-3 w-3" />
-                                  Assign Login
+                                  <KeyRound className="h-3 w-3 shrink-0" />
+                                  <span>Assign Login</span>
                                 </button>
                               )}
                             </td>
                             <td className="px-3 py-3.5 min-w-[160px]">
-                              <div className="flex justify-between font-mono text-[11px] text-slate-700">
+                              <div className="flex justify-between gap-2 font-mono text-[11px] leading-normal text-slate-700">
                                 <span>{formatFileSize(usage.bytes)}</span>
-                                <span className="text-slate-400">{usage.count} file(s)</span>
+                                <span className="text-slate-400 whitespace-nowrap">{usage.count} file(s)</span>
                               </div>
                               <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-200/70">
                                 <div
@@ -558,21 +551,22 @@ export const AdminDashboardPage: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => navigate(`/admin/client/${dir.id}`)}
-                                  className="inline-flex items-center gap-1 rounded-xl bg-[#18181B] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800 cursor-pointer"
+                                  className="inline-flex items-center gap-1 rounded-xl bg-[#18181B] px-3 py-1.5 text-[11px] font-semibold leading-normal text-white hover:bg-slate-800 cursor-pointer"
                                 >
-                                  <Eye className="h-3 w-3" />
-                                  Inspect & Audit
-                                  <ArrowUpRight className="h-3 w-3" />
+                                  <Eye className="h-3 w-3 shrink-0" />
+                                  <span>Inspect &amp; Audit</span>
+                                  <ArrowUpRight className="h-3 w-3 shrink-0" />
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setCredTarget(dir);
                                     setCredEmail(dir.assignedEmail ?? '');
-                                    setCredPassword(generateTempPassword(12));
+                                    setCredPassword('');
+                                    setShowCredPassword(false);
                                   }}
-                                  title="Assign or reset client login"
-                                  className="rounded-xl border border-slate-200 bg-white p-1.5 text-slate-600 hover:bg-slate-50 cursor-pointer"
+                                  title="Update client username or change password"
+                                  className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-1.5 text-slate-600 hover:bg-slate-50 cursor-pointer"
                                 >
                                   <KeyRound className="h-3.5 w-3.5" />
                                 </button>
@@ -581,7 +575,7 @@ export const AdminDashboardPage: React.FC = () => {
                                     type="button"
                                     onClick={() => setDeleteTarget(dir)}
                                     title="Delete client directory"
-                                    className="rounded-xl border border-rose-200 bg-white p-1.5 text-rose-600 hover:bg-rose-50 cursor-pointer"
+                                    className="inline-flex items-center justify-center rounded-xl border border-rose-200 bg-white p-1.5 text-rose-600 hover:bg-rose-50 cursor-pointer"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </button>
@@ -596,13 +590,12 @@ export const AdminDashboardPage: React.FC = () => {
                 </div>
               )}
             </div>
-          )}
 
-          {tab === 'VAULT' && (
-            <div className="overflow-hidden rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
-              <div className="border-b border-slate-200/70 px-5 py-3.5">
-                <h2 className="font-display text-sm font-bold text-slate-900">
-                  All Client .XLSX Vault Files ({vaultFiles.length})
+          <div className="overflow-hidden rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/70 px-5 py-3.5">
+                <h2 className="inline-flex items-center gap-2 font-display text-sm font-bold leading-snug text-slate-900">
+                  <HardDrive className="h-4 w-4 text-[#0B4DA2] shrink-0" />
+                  <span>Global .XLSX Vault — All Client Files ({vaultFiles.length})</span>
                 </h2>
               </div>
               {vaultFiles.length === 0 ? (
@@ -614,11 +607,11 @@ export const AdminDashboardPage: React.FC = () => {
                   <table className="w-full border-collapse text-left text-xs">
                     <thead>
                       <tr className="border-b border-slate-200/80 bg-[#F4F8FD]/90 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-                        <th className="px-4 py-3">Client Directory</th>
-                        <th className="px-3 py-3">Workbook Name</th>
-                        <th className="px-3 py-3">Period</th>
-                        <th className="px-3 py-3 text-right">Size</th>
-                        <th className="px-4 py-3 text-right">Actions</th>
+                        <th className="px-4 py-3 whitespace-nowrap">Client Directory</th>
+                        <th className="px-3 py-3 whitespace-nowrap">Workbook Name</th>
+                        <th className="px-3 py-3 whitespace-nowrap">Period</th>
+                        <th className="px-3 py-3 text-right whitespace-nowrap">Size</th>
+                        <th className="px-4 py-3 text-right whitespace-nowrap">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200/70">
@@ -626,24 +619,24 @@ export const AdminDashboardPage: React.FC = () => {
                         const owner = directories.find((d) => d.id === file.clientDirectoryId);
                         return (
                           <tr key={file.id} className="hover:bg-[#F5F9FE]/80 transition-colors">
-                            <td className="px-4 py-3.5 font-semibold text-slate-900">
+                            <td className="px-4 py-3.5 max-w-[220px] font-semibold leading-normal text-slate-900 break-words">
                               {owner?.companyName ?? file.clientDirectoryId}
                             </td>
-                            <td className="px-3 py-3.5">
-                              <div className="flex items-center gap-1.5 font-medium text-slate-800">
-                                <FileSpreadsheet className="h-3.5 w-3.5 text-[#0B4DA2]" />
-                                {file.fileName}
+                            <td className="px-3 py-3.5 max-w-[320px]">
+                              <div className="flex items-center gap-1.5 font-medium leading-normal text-slate-800 min-w-0">
+                                <FileSpreadsheet className="h-3.5 w-3.5 text-[#0B4DA2] shrink-0" />
+                                <span className="truncate leading-normal" title={file.fileName}>{file.fileName}</span>
                               </div>
-                              <div className="font-mono text-[10px] text-slate-400">
+                              <div className="font-mono text-[10px] leading-normal text-slate-400 break-all">
                                 {file.storagePath}
                               </div>
                             </td>
-                            <td className="px-3 py-3.5">
-                              <span className="rounded-md bg-[#E7F0FC] px-2 py-0.5 font-mono text-[11px] font-semibold text-[#0B4DA2]">
+                            <td className="px-3 py-3.5 whitespace-nowrap">
+                              <span className="inline-flex items-center rounded-md bg-[#E7F0FC] px-2 py-0.5 font-mono text-[11px] font-semibold leading-normal text-[#0B4DA2]">
                                 {file.taxPeriod}
                               </span>
                             </td>
-                            <td className="px-3 py-3.5 text-right font-mono text-slate-800">
+                            <td className="px-3 py-3.5 text-right tabular-nums-mono whitespace-nowrap text-slate-800">
                               {formatFileSize(file.sizeBytes)}
                             </td>
                             <td className="px-4 py-3.5 text-right whitespace-nowrap">
@@ -651,7 +644,7 @@ export const AdminDashboardPage: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => navigate(`/admin/client/${file.clientDirectoryId}`)}
-                                  className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
+                                  className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium leading-normal text-slate-700 hover:bg-slate-50 cursor-pointer"
                                 >
                                   Open Client
                                 </button>
@@ -661,7 +654,7 @@ export const AdminDashboardPage: React.FC = () => {
                                     const blob = await downloadVaultXlsxBlob(file);
                                     triggerBlobDownload(blob, file.fileName);
                                   }}
-                                  className="rounded-xl bg-[#18181B] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800 cursor-pointer"
+                                  className="inline-flex items-center justify-center rounded-xl bg-[#18181B] px-3 py-1.5 text-[11px] font-semibold leading-normal text-white hover:bg-slate-800 cursor-pointer"
                                 >
                                   Download
                                 </button>
@@ -675,7 +668,6 @@ export const AdminDashboardPage: React.FC = () => {
                 </div>
               )}
             </div>
-          )}
         </main>
       </div>
 
@@ -774,37 +766,41 @@ export const AdminDashboardPage: React.FC = () => {
                 {assignLogin && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-700">
-                        Client Email *
+                      <label className="block text-[11px] font-semibold leading-normal text-slate-700">
+                        Username *
                       </label>
                       <input
-                        type="email"
+                        type="text"
                         required={assignLogin}
+                        autoComplete="username"
                         value={newEmail}
                         onChange={(e) => setNewEmail(e.target.value)}
-                        placeholder="accounting@client.ph"
-                        className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-[#0B4DA2] focus:outline-none"
+                        placeholder="client_username"
+                        className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs leading-normal text-slate-900 focus:border-[#0B4DA2] focus:outline-none"
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-700">
+                      <label className="block text-[11px] font-semibold leading-normal text-slate-700">
                         Initial Password *
                       </label>
-                      <div className="mt-1 flex gap-1">
+                      <div className="relative mt-1">
                         <input
-                          type="text"
+                          type={showNewPassword ? 'text' : 'password'}
                           required={assignLogin}
                           minLength={8}
+                          autoComplete="new-password"
                           value={newPassword}
                           onChange={(e) => setNewPassword(e.target.value)}
-                          className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-[#0B4DA2] focus:outline-none"
+                          placeholder="Min 8 characters"
+                          className="w-full rounded-xl border border-slate-300 bg-white py-1.5 pl-2.5 pr-8 text-xs leading-normal text-slate-900 focus:border-[#0B4DA2] focus:outline-none"
                         />
                         <button
                           type="button"
-                          onClick={() => setNewPassword(generateTempPassword(12))}
-                          className="rounded-xl border border-slate-300 bg-white px-2.5 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          onClick={() => setShowNewPassword((v) => !v)}
+                          aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center rounded-md p-0.5 text-slate-500 hover:bg-slate-100 cursor-pointer"
                         >
-                          Gen
+                          {showNewPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                         </button>
                       </div>
                     </div>
@@ -847,41 +843,51 @@ export const AdminDashboardPage: React.FC = () => {
       {credTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-[24px] border-2 border-white bg-white p-6 shadow-2xl">
-            <h3 className="font-display text-base font-bold text-slate-900">
+            <h3 className="font-display text-base font-bold leading-snug text-slate-900">
               Client Portal Credentials
             </h3>
-            <p className="mt-1 text-xs text-slate-500">
-              Assign login access strictly scoped to <strong>{credTarget.companyName}</strong>.
+            <p className="mt-1 text-xs leading-normal text-slate-500 break-words">
+              Assign or update login access strictly scoped to <strong>{credTarget.companyName}</strong>.
             </p>
             <form onSubmit={handleAssignCredsSubmit} className="mt-4 space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700">Client Email</label>
+                <label className="block text-xs font-semibold leading-normal text-slate-700">Username</label>
                 <input
-                  type="email"
+                  type="text"
                   required
+                  autoComplete="username"
                   value={credEmail}
                   onChange={(e) => setCredEmail(e.target.value)}
-                  placeholder="client@company.ph"
-                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-slate-900 focus:border-[#0B4DA2] focus:outline-none"
+                  placeholder="Enter client username..."
+                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-xs leading-normal text-slate-900 focus:border-[#0B4DA2] focus:outline-none"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700">Password</label>
-                <div className="mt-1 flex gap-1.5">
+                <label className="block text-xs font-semibold leading-normal text-slate-700">
+                  {credTarget.assignedEmail ? 'Change Password' : 'Password'}
+                </label>
+                <div className="relative mt-1">
                   <input
-                    type="text"
-                    required
-                    minLength={8}
+                    type={showCredPassword ? 'text' : 'password'}
+                    required={!credTarget.assignedEmail}
+                    minLength={credPassword ? 8 : undefined}
+                    autoComplete="new-password"
                     value={credPassword}
                     onChange={(e) => setCredPassword(e.target.value)}
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2 font-mono text-xs text-slate-900 focus:border-[#0B4DA2] focus:outline-none"
+                    placeholder={
+                      credTarget.assignedEmail
+                        ? 'Enter new password (leave blank to keep)...'
+                        : 'Minimum 8 characters...'
+                    }
+                    className="w-full rounded-xl border border-slate-300 py-2 pl-3 pr-9 text-xs leading-normal text-slate-900 focus:border-[#0B4DA2] focus:outline-none"
                   />
                   <button
                     type="button"
-                    onClick={() => setCredPassword(generateTempPassword(12))}
-                    className="rounded-xl border border-slate-300 px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
+                    onClick={() => setShowCredPassword((v) => !v)}
+                    aria-label={showCredPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center rounded-md p-1 text-slate-500 hover:bg-slate-100 cursor-pointer"
                   >
-                    Generate
+                    {showCredPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
                 </div>
               </div>
@@ -889,14 +895,14 @@ export const AdminDashboardPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setCredTarget(null)}
-                  className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 cursor-pointer"
+                  className="inline-flex items-center justify-center rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-medium leading-normal text-slate-700 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={savingCred}
-                  className="rounded-xl bg-[#18181B] px-4 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 cursor-pointer disabled:opacity-60"
+                  className="inline-flex items-center justify-center rounded-xl bg-[#18181B] px-4 py-1.5 text-xs font-semibold leading-normal text-white hover:bg-slate-800 cursor-pointer disabled:opacity-60"
                 >
                   {savingCred ? 'Saving...' : 'Save Credentials'}
                 </button>
@@ -910,17 +916,17 @@ export const AdminDashboardPage: React.FC = () => {
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-xs">
           <div className="w-full max-w-sm rounded-2xl border-2 border-white bg-white p-5 shadow-2xl">
-            <h3 className="font-display text-sm font-bold text-slate-900">
+            <h3 className="font-display text-sm font-bold leading-snug text-slate-900 break-words">
               Delete {deleteTarget.companyName}?
             </h3>
-            <p className="mt-1.5 text-xs text-slate-600">
+            <p className="mt-1.5 text-xs leading-normal text-slate-600">
               This removes the client directory, all ledger entries, TIN profiles, and stored .xlsx vault workbooks.
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setDeleteTarget(null)}
-                className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 cursor-pointer"
+                className="inline-flex items-center justify-center rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-medium leading-normal text-slate-700 cursor-pointer"
               >
                 Cancel
               </button>
@@ -928,7 +934,7 @@ export const AdminDashboardPage: React.FC = () => {
                 type="button"
                 disabled={deleting}
                 onClick={() => void handleDeleteDirectory()}
-                className="rounded-xl bg-rose-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 cursor-pointer disabled:opacity-60"
+                className="inline-flex items-center justify-center rounded-xl bg-rose-600 px-3.5 py-1.5 text-xs font-semibold leading-normal text-white hover:bg-rose-700 cursor-pointer disabled:opacity-60"
               >
                 {deleting ? 'Deleting...' : 'Delete Directory'}
               </button>
@@ -937,14 +943,24 @@ export const AdminDashboardPage: React.FC = () => {
         </div>
       )}
 
+      {user && (
+        <ChangePasswordModal
+          isOpen={showChangePassword}
+          userId={user.id}
+          usernameLabel={user.email}
+          onClose={() => setShowChangePassword(false)}
+          onSuccess={(msg) => showToast(msg)}
+        />
+      )}
+
       {toast && (
-        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-xl border border-slate-800 bg-[#18181B] px-4 py-2.5 text-xs font-medium text-white shadow-xl">
+        <div className="fixed bottom-4 right-4 z-50 flex max-w-[calc(100vw-2rem)] items-center gap-2 rounded-xl border border-slate-800 bg-[#18181B] px-4 py-2.5 text-xs font-medium leading-normal text-white shadow-xl">
           {toast.type === 'error' ? (
             <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
           ) : (
             <CheckCircle2 className="h-4 w-4 text-sky-400 shrink-0" />
           )}
-          <span>{toast.message}</span>
+          <span className="break-words">{toast.message}</span>
         </div>
       )}
     </div>

@@ -4,8 +4,16 @@ import {
   fetchUserProfileById,
   hasAnyAdminAccount,
   registerFirstPreviewAdmin,
+  setActiveSessionUser,
 } from '@/lib/portalStore';
+import {
+  AUTH_RATE_LIMIT,
+  assertWithinRateLimit,
+  clearRateLimit,
+  recordRateLimitFailure,
+} from '@/lib/rateLimit';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { loginCredentialsSchema } from '@/lib/validation';
 import type { UserProfile } from '@/types/portal';
 
 interface AuthContextValue {
@@ -23,6 +31,8 @@ interface AuthContextValue {
   refreshProfile: () => Promise<void>;
 }
 
+const PREVIEW_SESSION_KEY = 'nasher_portal_preview_session_user_id_v1';
+
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -33,20 +43,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const hydrateFromSupabase = useCallback(async (userId: string, fallbackEmail?: string, meta?: Record<string, unknown>) => {
     const profile = await fetchUserProfileById(userId);
     if (profile) {
+      setActiveSessionUser(profile);
       setUser(profile);
       return profile;
     }
-    // Graceful fallback if auth trigger hasn't settled yet
-    const role = meta?.role === 'admin' ? 'admin' : 'client';
+    // Least-privilege fallback if auth trigger hasn't settled yet: never trust client user_metadata for role or directory
     const fallback: UserProfile = {
       id: userId,
       email: fallbackEmail ?? '',
-      fullName: String(meta?.full_name ?? ''),
-      role,
-      clientDirectoryId: meta?.client_directory_id ? String(meta.client_directory_id) : null,
+      fullName: typeof meta?.full_name === 'string' ? meta.full_name.slice(0, 160) : '',
+      role: 'client',
+      clientDirectoryId: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+    setActiveSessionUser(fallback);
     setUser(fallback);
     return fallback;
   }, []);
@@ -57,7 +68,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     async function init() {
       if (!isSupabaseConfigured || !supabase) {
         const hasAdmin = await hasAnyAdminAccount();
+        let restoredUser: UserProfile | null = null;
+        try {
+          // Migrate off persistent localStorage if an older session exists
+          const legacyId = localStorage.getItem(PREVIEW_SESSION_KEY);
+          if (legacyId) {
+            localStorage.removeItem(PREVIEW_SESSION_KEY);
+          }
+          const savedUserId = sessionStorage.getItem(PREVIEW_SESSION_KEY) ?? legacyId;
+          if (savedUserId) {
+            restoredUser = await fetchUserProfileById(savedUserId);
+            if (restoredUser) {
+              sessionStorage.setItem(PREVIEW_SESSION_KEY, restoredUser.id);
+              setActiveSessionUser(restoredUser);
+            } else {
+              sessionStorage.removeItem(PREVIEW_SESSION_KEY);
+              setActiveSessionUser(null);
+            }
+          }
+        } catch {
+          // ignore storage errors
+        }
         if (mounted) {
+          if (restoredUser) setUser(restoredUser);
           setNeedsFirstRunAdminSetup(!hasAdmin);
           setLoading(false);
         }
@@ -87,6 +120,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!mounted) return;
       if (!session?.user) {
+        setActiveSessionUser(null);
         setUser(null);
         return;
       }
@@ -105,22 +139,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signIn = useCallback(
     async (email: string, password: string): Promise<UserProfile> => {
+      const parsed = loginCredentialsSchema.safeParse({ identifier: email, password });
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues[0]?.message || 'Invalid credentials.');
+      }
+
       if (!isSupabaseConfigured || !supabase) {
-        const profile = await authenticatePreviewUser(email, password);
+        const profile = await authenticatePreviewUser(parsed.data.identifier, parsed.data.password);
+        try {
+          sessionStorage.setItem(PREVIEW_SESSION_KEY, profile.id);
+          localStorage.removeItem(PREVIEW_SESSION_KEY);
+        } catch {
+          // ignore storage errors
+        }
+        setActiveSessionUser(profile);
         setUser(profile);
         setNeedsFirstRunAdminSetup(false);
         return profile;
       }
 
+      const cleanInput = parsed.data.identifier.toLowerCase();
+      const rlKey = `supabase_login:${cleanInput}`;
+      assertWithinRateLimit(rlKey, AUTH_RATE_LIMIT);
+
+      const authEmail = cleanInput.includes('@')
+        ? cleanInput
+        : `${cleanInput.replace(/[^a-z0-9._-]/g, '')}@npb-portal.local`;
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
+        email: authEmail,
+        password: parsed.data.password,
       });
 
       if (error || !data.user) {
+        recordRateLimitFailure(rlKey, AUTH_RATE_LIMIT);
         throw new Error(error?.message || 'Unable to sign in with those credentials.');
       }
 
+      clearRateLimit(rlKey);
       const profile = await hydrateFromSupabase(
         data.user.id,
         data.user.email,
@@ -137,6 +192,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const setupFirstPreviewAdmin = useCallback(
     async (params: { email: string; password: string; fullName: string }): Promise<UserProfile> => {
       const admin = await registerFirstPreviewAdmin(params);
+      try {
+        sessionStorage.setItem(PREVIEW_SESSION_KEY, admin.id);
+        localStorage.removeItem(PREVIEW_SESSION_KEY);
+      } catch {
+        // ignore storage errors
+      }
+      setActiveSessionUser(admin);
       setUser(admin);
       setNeedsFirstRunAdminSetup(false);
       return admin;
@@ -145,8 +207,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 
   const signOut = useCallback(async () => {
+    setActiveSessionUser(null);
     if (isSupabaseConfigured && supabase) {
       await supabase.auth.signOut();
+    } else {
+      try {
+        sessionStorage.removeItem(PREVIEW_SESSION_KEY);
+        localStorage.removeItem(PREVIEW_SESSION_KEY);
+      } catch {
+        // ignore storage errors
+      }
     }
     setUser(null);
     const hasAdmin = await hasAnyAdminAccount();
@@ -156,7 +226,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshProfile = useCallback(async () => {
     if (!user) return;
     const latest = await fetchUserProfileById(user.id);
-    if (latest) setUser(latest);
+    if (latest) {
+      setActiveSessionUser(latest);
+      setUser(latest);
+    }
   }, [user]);
 
   return (

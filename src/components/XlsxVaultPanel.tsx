@@ -318,17 +318,17 @@ export const XlsxVaultPanel: React.FC<XlsxVaultPanelProps> = ({
       {/* Storage Header & Quota Summary */}
       <div className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-5 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-lg bg-[#E7F0FC] px-2.5 py-1 text-xs font-semibold text-[#0B4DA2]">
-              <FolderLock className="h-3.5 w-3.5" />
-              Direct Browser-to-Cloud Storage Vault · Zero Vercel 4.5MB Payload Limit
+          <div className="min-w-0 flex-1">
+            <div className="inline-flex items-center gap-2 rounded-lg bg-[#E7F0FC] px-2.5 py-1 text-xs font-semibold leading-normal text-[#0B4DA2]">
+              <FolderLock className="h-3.5 w-3.5 shrink-0" />
+              <span className="break-words">Direct Browser-to-Cloud Storage Vault · Zero Vercel 4.5MB Payload Limit</span>
             </div>
-            <h2 className="mt-2.5 font-display text-lg font-bold text-slate-900">
+            <h2 className="mt-2.5 font-display text-lg font-bold leading-snug text-slate-900 break-words">
               {client.companyName} — .XLSX Filing Vault
             </h2>
-            <p className="mt-0.5 text-xs text-slate-500">
+            <p className="mt-0.5 text-xs leading-normal text-slate-500 break-words">
               Isolated path:{' '}
-              <code className="rounded-md bg-[#F4F8FD] px-1.5 py-0.5 font-mono text-[11px] text-[#0B4DA2]">
+              <code className="rounded-md bg-[#F4F8FD] px-1.5 py-0.5 font-mono text-[11px] leading-normal text-[#0B4DA2] break-all">
                 {VAULT_BUCKET}/{client.id}/{taxYear}/{taxPeriod}/&lt;filename&gt;.xlsx
               </code>
               {!isSupabaseMode && (
@@ -339,7 +339,7 @@ export const XlsxVaultPanel: React.FC<XlsxVaultPanelProps> = ({
             </p>
           </div>
 
-          <div className="min-w-[240px] rounded-xl border border-[#BBD6F2] bg-[#EBF3FC]/75 px-4 py-3">
+          <div className="w-full sm:w-auto sm:min-w-[240px] rounded-xl border border-[#BBD6F2] bg-[#EBF3FC]/75 px-4 py-3">
             <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
               <span className="inline-flex items-center gap-1.5">
                 <HardDrive className="h-3.5 w-3.5 text-[#0B4DA2]" />
@@ -513,15 +513,15 @@ export const XlsxVaultPanel: React.FC<XlsxVaultPanelProps> = ({
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <FileSpreadsheet className="h-4 w-4 text-[#0B4DA2] shrink-0" />
-                        <span className="truncate text-xs font-semibold text-slate-900">
+                        <span className="truncate leading-normal text-xs font-semibold text-slate-900 max-w-full">
                           {item.file.name}
                         </span>
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] leading-normal text-slate-700 whitespace-nowrap">
                           {formatFileSize(item.file.size)}
                         </span>
-                        <span className="rounded bg-[#E7F0FC] px-1.5 py-0.5 text-[10px] font-semibold text-[#0B4DA2]">
+                        <span className="rounded bg-[#E7F0FC] px-1.5 py-0.5 text-[10px] font-semibold leading-normal text-[#0B4DA2] whitespace-nowrap">
                           {item.taxPeriod}
                         </span>
                       </div>
@@ -615,22 +615,22 @@ export const XlsxVaultPanel: React.FC<XlsxVaultPanelProps> = ({
               Stored .XLSX Archive ({filteredFiles.length})
             </h3>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            <div className="relative flex-1 sm:flex-initial min-w-0">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search filename or tag..."
-                className="w-52 rounded-xl border border-slate-300/80 bg-white/90 py-1.5 pl-8 pr-3 text-xs text-slate-900 focus:border-[#0B4DA2] focus:outline-none"
+                className="w-full sm:w-52 rounded-xl border border-slate-300/80 bg-white/90 py-1.5 pl-8 pr-3 text-xs leading-normal text-slate-900 focus:border-[#0B4DA2] focus:outline-none"
               />
             </div>
 
             <select
               value={periodFilter}
               onChange={(e) => setPeriodFilter(e.target.value)}
-              className="rounded-xl border border-slate-300/80 bg-white/90 px-2.5 py-1.5 text-xs font-medium text-slate-800 focus:border-[#0B4DA2] focus:outline-none"
+              className="rounded-xl border border-slate-300/80 bg-white/90 px-2.5 py-1.5 text-xs font-medium leading-normal text-slate-800 focus:border-[#0B4DA2] focus:outline-none"
             >
               <option value="ALL">All Tax Periods</option>
               {availablePeriods.map((p) => (
@@ -678,14 +678,14 @@ export const XlsxVaultPanel: React.FC<XlsxVaultPanelProps> = ({
                       <div className="flex items-center gap-2">
                         <FileSpreadsheet className="h-4 w-4 text-[#0B4DA2] shrink-0" />
                         <div className="min-w-0">
-                          <div className="font-semibold text-slate-900 truncate max-w-[280px]">
+                          <div className="font-semibold leading-normal text-slate-900 truncate max-w-[220px] sm:max-w-[300px]" title={file.fileName}>
                             {file.fileName}
                           </div>
-                          <div className="font-mono text-[10px] text-slate-400 truncate max-w-[280px]">
+                          <div className="font-mono text-[10px] leading-normal text-slate-400 truncate max-w-[220px] sm:max-w-[300px]" title={file.storagePath}>
                             {file.storagePath}
                           </div>
                           {file.notes && (
-                            <div className="mt-0.5 text-[11px] text-slate-500 truncate max-w-[280px]">
+                            <div className="mt-0.5 text-[11px] leading-normal text-slate-500 truncate max-w-[220px] sm:max-w-[300px]" title={file.notes}>
                               {file.notes}
                             </div>
                           )}
@@ -693,22 +693,24 @@ export const XlsxVaultPanel: React.FC<XlsxVaultPanelProps> = ({
                       </div>
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
-                      <span className="rounded-md bg-[#E7F0FC] px-2 py-0.5 font-mono text-[11px] font-semibold text-[#0B4DA2]">
+                      <span className="inline-flex items-center rounded-md bg-[#E7F0FC] px-2 py-0.5 font-mono text-[11px] font-semibold leading-normal text-[#0B4DA2]">
                         {file.taxPeriod}
                       </span>
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
-                      <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                      <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium leading-normal text-slate-700">
                         {file.entryScope}
                       </span>
                     </td>
-                    <td className="px-3 py-3 text-right font-mono whitespace-nowrap font-medium text-slate-800">
+                    <td className="px-3 py-3 text-right tabular-nums-mono whitespace-nowrap font-medium text-slate-800">
                       {formatFileSize(file.sizeBytes)}
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap text-slate-500">
-                      <div>{new Date(file.createdAt).toLocaleDateString()}</div>
+                      <div className="leading-normal">{new Date(file.createdAt).toLocaleDateString()}</div>
                       {file.uploadedByEmail && (
-                        <div className="text-[10px] text-slate-400">{file.uploadedByEmail}</div>
+                        <div className="text-[10px] leading-normal text-slate-400 truncate max-w-[180px]" title={file.uploadedByEmail}>
+                          {file.uploadedByEmail}
+                        </div>
                       )}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
@@ -717,34 +719,34 @@ export const XlsxVaultPanel: React.FC<XlsxVaultPanelProps> = ({
                           type="button"
                           onClick={() => handlePreviewStoredFile(file)}
                           disabled={previewLoadingId === file.id}
-                          className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium leading-normal text-slate-700 hover:bg-slate-50 cursor-pointer disabled:opacity-50"
                         >
                           {previewLoadingId === file.id ? (
                             <Loader2 className="h-3 w-3 animate-spin" />
                           ) : (
                             <Eye className="h-3 w-3" />
                           )}
-                          Preview
+                          <span>Preview</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => handleDownloadFile(file)}
                           disabled={downloadingId === file.id}
-                          className="inline-flex items-center gap-1 rounded-xl bg-[#18181B] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800 cursor-pointer disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-xl bg-[#18181B] px-3 py-1.5 text-[11px] font-semibold leading-normal text-white hover:bg-slate-800 cursor-pointer disabled:opacity-50"
                         >
                           {downloadingId === file.id ? (
                             <Loader2 className="h-3 w-3 animate-spin" />
                           ) : (
                             <Download className="h-3 w-3" />
                           )}
-                          Download
+                          <span>Download</span>
                         </button>
                         {isAdminMode && (
                           <button
                             type="button"
                             onClick={() => setConfirmDeleteFile(file)}
                             title="Delete from vault"
-                            className="rounded-xl border border-rose-200 bg-white p-1.5 text-rose-600 hover:bg-rose-50 cursor-pointer"
+                            className="inline-flex items-center justify-center rounded-xl border border-rose-200 bg-white p-1.5 text-rose-600 hover:bg-rose-50 cursor-pointer"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -764,11 +766,11 @@ export const XlsxVaultPanel: React.FC<XlsxVaultPanelProps> = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-xs">
           <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-[24px] border-2 border-white bg-white shadow-2xl">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 px-5 py-3.5">
-              <div>
-                <h3 className="font-display text-sm font-bold text-slate-900">
+              <div className="min-w-0 flex-1">
+                <h3 className="font-display text-sm font-bold leading-snug text-slate-900 break-words">
                   {previewModal.title}
                 </h3>
-                <p className="text-xs text-slate-500">{previewModal.subtitle}</p>
+                <p className="text-xs leading-normal text-slate-500 break-words">{previewModal.subtitle}</p>
               </div>
               <div className="flex items-center gap-2">
                 {previewModal.sourceBlob && previewModal.data.sheetNames.length > 1 && (
@@ -826,10 +828,12 @@ export const XlsxVaultPanel: React.FC<XlsxVaultPanelProps> = ({
                           {previewModal.data.headers.map((_, cIdx) => (
                             <td
                               key={cIdx}
-                              className="border-r border-slate-100 px-3 py-1.5 whitespace-nowrap text-slate-800 max-w-[240px] truncate"
+                              className="border-r border-slate-100 px-3 py-2 whitespace-nowrap text-slate-800"
                               title={row[cIdx] ?? ''}
                             >
-                              {row[cIdx] ?? ''}
+                              <div className="max-w-[240px] truncate leading-normal">
+                                {row[cIdx] ?? ''}
+                              </div>
                             </td>
                           ))}
                         </tr>

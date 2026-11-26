@@ -217,11 +217,11 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="font-display text-lg font-bold text-slate-900">
+        <div className="min-w-0 flex-1">
+          <h2 className="font-display text-lg font-bold leading-snug text-slate-900">
             Tax Filing Analyzer &amp; Audit Summary
           </h2>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs leading-normal text-slate-500 break-words">
             Live BIR VAT, Withholding Tax, and account breakdown ·{' '}
             <span className="font-semibold text-slate-700">
               {activeMonthFilter === 'ALL'
@@ -233,13 +233,13 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 max-w-full">
           {monthCover !== 'ALL' && (
-            <div className="inline-flex rounded-xl border border-white/90 bg-white/80 backdrop-blur-md p-1">
+            <div className="inline-flex flex-wrap max-w-full rounded-xl border border-white/90 bg-white/80 backdrop-blur-md p-1">
               <button
                 type="button"
                 onClick={() => setPeriodFilterMode('COVERED')}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold leading-normal transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   periodFilterMode === 'COVERED'
                     ? 'bg-[#0B4DA2] text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -250,7 +250,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => setPeriodFilterMode('ALL')}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold leading-normal transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   periodFilterMode === 'ALL'
                     ? 'bg-[#18181B] text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -261,13 +261,13 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             </div>
           )}
 
-          <div className="inline-flex rounded-xl border border-white/90 bg-white/80 backdrop-blur-md p-1">
+          <div className="inline-flex flex-wrap max-w-full rounded-xl border border-white/90 bg-white/80 backdrop-blur-md p-1">
             {(['SALES', 'PURCHASES', 'COMBINED'] as const).map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => setScope(s)}
-                className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold leading-normal transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   scope === s
                     ? 'bg-[#0B4DA2] text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -282,40 +282,40 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
       {/* Primary KPI Grid */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
-          <div className="text-xs font-medium text-slate-500">Total Gross &amp; Exempt</div>
-          <div className="mt-1 tabular-nums-mono text-2xl font-bold text-slate-900">
+        <div className="min-w-0 rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
+          <div className="text-xs font-medium leading-normal text-slate-500">Total Gross &amp; Exempt</div>
+          <div className="mt-1 tabular-nums-mono text-2xl font-bold leading-normal text-slate-900 break-words">
             ₱{formatAccounting(totals.total)}
           </div>
-          <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
-            <span>VATable: {formatAccounting(totals.grossOfVat)}</span>
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs leading-normal text-slate-500">
+            <span className="tabular-nums-mono">VATable: {formatAccounting(totals.grossOfVat)}</span>
             <span aria-hidden="true">·</span>
-            <span>Non-VAT: {formatAccounting(totals.nonVatExempt)}</span>
+            <span className="tabular-nums-mono">Non-VAT: {formatAccounting(totals.nonVatExempt)}</span>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
-          <div className="text-xs font-medium text-slate-500">
+        <div className="min-w-0 rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
+          <div className="text-xs font-medium leading-normal text-slate-500">
             {scope === 'SALES'
               ? 'Output VAT (12%)'
               : scope === 'PURCHASES'
               ? 'Input VAT (12%)'
               : 'Total VAT Volume'}
           </div>
-          <div className="mt-1 tabular-nums-mono text-2xl font-bold text-slate-900">
+          <div className="mt-1 tabular-nums-mono text-2xl font-bold leading-normal text-slate-900 break-words">
             ₱{formatAccounting(totals.vat)}
           </div>
-          <div className="mt-2 text-xs text-slate-500">
+          <div className="mt-2 text-xs leading-normal text-slate-500">
             Net of VAT Base: <span className="tabular-nums-mono font-medium text-slate-700">{formatAccounting(totals.netOfVat)}</span>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
-          <div className="text-xs font-medium text-slate-500">Total Withholding Taxes</div>
-          <div className="mt-1 tabular-nums-mono text-2xl font-bold text-slate-900">
+        <div className="min-w-0 rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
+          <div className="text-xs font-medium leading-normal text-slate-500">Total Withholding Taxes</div>
+          <div className="mt-1 tabular-nums-mono text-2xl font-bold leading-normal text-slate-900 break-words">
             ₱{formatAccounting(totals.totalWithholding)}
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500 tabular-nums-mono">
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-normal text-slate-500 tabular-nums-mono">
             <span>1%: {formatAccounting(totals.wtGoods1)}</span>
             <span>·</span>
             <span>2%: {formatAccounting(totals.wtServices2)}</span>
@@ -330,19 +330,19 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
-          <div className="text-xs font-medium text-slate-500">
+        <div className="min-w-0 rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
+          <div className="text-xs font-medium leading-normal text-slate-500">
             {scope === 'PURCHASES' ? 'Net Payable (Total - EWT)' : 'Actual vs. Expected Net'}
           </div>
-          <div className="mt-1 tabular-nums-mono text-2xl font-bold text-slate-900">
+          <div className="mt-1 tabular-nums-mono text-2xl font-bold leading-normal text-slate-900 break-words">
             ₱{formatAccounting(scope === 'PURCHASES' ? totals.expectedNet : totals.actual)}
           </div>
           {scope === 'PURCHASES' ? (
-            <div className="mt-2 text-xs text-slate-500">
+            <div className="mt-2 text-xs leading-normal text-slate-500">
               Across {totals.rowCount} purchase entries
             </div>
           ) : (
-            <div className="mt-2 flex items-center gap-2 text-xs">
+            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs leading-normal">
               <span className="text-slate-500">
                 Expected: <span className="tabular-nums-mono">{formatAccounting(totals.expectedNet)}</span>
               </span>
@@ -581,18 +581,18 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 ) : (
                   byAccountTitle.map((acct) => (
                     <tr key={acct.accountTitle} className="hover:bg-[#F4F8FD]/60 transition-colors">
-                      <td className="px-4 py-2.5 font-semibold text-slate-900">{acct.accountTitle}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums-mono text-slate-600">{acct.rowCount}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums-mono text-slate-700">
+                      <td className="px-4 py-2.5 font-semibold leading-normal text-slate-900 break-words">{acct.accountTitle}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums-mono whitespace-nowrap text-slate-600">{acct.rowCount}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
                         {formatAccounting(acct.netOfVat + acct.nonVatExempt)}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums-mono text-slate-700">
+                      <td className="px-3 py-2.5 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
                         {formatAccounting(acct.vat)}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums-mono text-slate-700">
+                      <td className="px-3 py-2.5 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
                         {formatAccounting(acct.totalWithholding)}
                       </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums-mono font-semibold text-slate-900">
+                      <td className="px-4 py-2.5 text-right tabular-nums-mono whitespace-nowrap font-semibold text-slate-900">
                         {formatAccounting(acct.total)}
                       </td>
                     </tr>
@@ -608,7 +608,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <div className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl shadow-sm shadow-[#0B4DA2]/[0.04] overflow-hidden">
           <div className="border-b border-slate-200/70 px-5 py-3.5">
-            <h3 className="font-display text-sm font-semibold text-slate-900">
+            <h3 className="font-display text-sm font-semibold leading-snug text-slate-900">
               {scope === 'PURCHASES' ? 'Top Payees / Suppliers' : 'Top Payors / Suppliers'}
             </h3>
           </div>
@@ -616,10 +616,10 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             <table className="w-full border-collapse text-left text-xs">
               <thead>
                 <tr className="border-b border-slate-200/70 bg-[#F4F8FD]/90 text-slate-600">
-                  <th className="px-4 py-2.5 font-semibold">NAME &amp; TIN</th>
-                  <th className="px-3 py-2.5 text-right font-semibold">TXNS</th>
-                  <th className="px-3 py-2.5 text-right font-semibold">WHT</th>
-                  <th className="px-4 py-2.5 text-right font-semibold">TOTAL</th>
+                  <th className="px-4 py-2.5 font-semibold whitespace-nowrap">NAME &amp; TIN</th>
+                  <th className="px-3 py-2.5 text-right font-semibold whitespace-nowrap">TXNS</th>
+                  <th className="px-3 py-2.5 text-right font-semibold whitespace-nowrap">WHT</th>
+                  <th className="px-4 py-2.5 text-right font-semibold whitespace-nowrap">TOTAL</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200/60">
@@ -632,17 +632,17 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 ) : (
                   topEntities.map((item, i) => (
                     <tr key={`${item.name}-${i}`} className="hover:bg-[#F4F8FD]/60 transition-colors">
-                      <td className="px-4 py-2.5">
-                        <div className="font-semibold text-slate-900">{item.name}</div>
-                        <div className="tabular-nums-mono text-[11px] text-slate-500">{item.tin}</div>
+                      <td className="px-4 py-2.5 max-w-[240px]">
+                        <div className="font-semibold leading-normal text-slate-900 break-words">{item.name}</div>
+                        <div className="tabular-nums-mono text-[11px] leading-normal text-slate-500">{item.tin}</div>
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums-mono text-slate-600">
+                      <td className="px-3 py-2.5 text-right tabular-nums-mono whitespace-nowrap text-slate-600">
                         {item.count}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums-mono text-slate-700">
+                      <td className="px-3 py-2.5 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
                         {formatAccounting(item.wht)}
                       </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums-mono font-semibold text-slate-900">
+                      <td className="px-4 py-2.5 text-right tabular-nums-mono whitespace-nowrap font-semibold text-slate-900">
                         {formatAccounting(item.total)}
                       </td>
                     </tr>
@@ -655,25 +655,25 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
         {/* Encoder Audit Checks */}
         <div className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl shadow-sm shadow-[#0B4DA2]/[0.04] overflow-hidden">
-          <div className="flex items-center justify-between border-b border-slate-200/70 px-5 py-3.5">
-            <h3 className="font-display text-sm font-semibold text-slate-900">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/70 px-5 py-3.5">
+            <h3 className="font-display text-sm font-semibold leading-snug text-slate-900">
               Encoder Audit Checks
             </h3>
             {flaggedDetails.length > 0 ? (
-              <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-800">
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
-                {flaggedDetails.length} row(s) need review
+              <span className="inline-flex items-center gap-1 text-xs font-semibold leading-normal text-amber-800 whitespace-nowrap">
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                <span>{flaggedDetails.length} row(s) need review</span>
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#0B4DA2]">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                All rows pass validation
+              <span className="inline-flex items-center gap-1 text-xs font-semibold leading-normal text-[#0B4DA2] whitespace-nowrap">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                <span>All rows pass validation</span>
               </span>
             )}
           </div>
 
           {flaggedDetails.length === 0 ? (
-            <div className="px-5 py-10 text-center text-xs text-slate-500">
+            <div className="px-5 py-10 text-center text-xs leading-normal text-slate-500">
               No missing TINs, invalid TIN lengths, missing addresses, or tax calculation discrepancies detected.
             </div>
           ) : (
@@ -683,21 +683,21 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                   key={item.row.id}
                   className="flex items-center justify-between gap-3 px-5 py-3 text-xs hover:bg-[#F4F8FD]/60 transition-colors"
                 >
-                  <div className="min-w-0">
-                    <div className="font-semibold text-slate-900 truncate">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold leading-normal text-slate-900 truncate">
                       {item.mode} · {item.row.date || '-'} · {item.row.payor || '(Missing Name)'}
                     </div>
-                    <div className="mt-0.5 text-amber-800">
+                    <div className="mt-0.5 leading-normal text-amber-800 break-words">
                       {item.issues.map((iss) => iss.message).join(' · ')}
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => onInspectFlaggedRows(item.mode)}
-                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200/90 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#F4F8FD] hover:text-[#0B4DA2] whitespace-nowrap shrink-0 cursor-pointer"
+                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200/90 bg-white px-2.5 py-1 text-xs font-medium leading-normal text-slate-700 hover:bg-[#F4F8FD] hover:text-[#0B4DA2] whitespace-nowrap shrink-0 cursor-pointer"
                   >
-                    Review
-                    <ArrowRight className="h-3 w-3" />
+                    <span>Review</span>
+                    <ArrowRight className="h-3 w-3 shrink-0" />
                   </button>
                 </div>
               ))}

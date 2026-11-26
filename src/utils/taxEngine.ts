@@ -160,13 +160,21 @@ export function getDefaultDateForCover(monthCover: string, yearCover: string): s
   return `${mIdx + 1}/1/${targetYear}`;
 }
 
-export function collectAvailableYears(rows: Pick<LedgerRow, 'date'>[]): string[] {
-  const set = new Set<string>([String(new Date().getFullYear())]);
+export function collectAvailableYears(
+  rows: Pick<LedgerRow, 'date'>[],
+  customYears: string[] = []
+): string[] {
+  const set = new Set<string>(['2026', '2027', '2028', '2029', '2030']);
+  const currentYear = String(new Date().getFullYear());
+  if (/^\d{4}$/.test(currentYear)) set.add(currentYear);
+  customYears.forEach((y) => {
+    if (/^\d{4}$/.test(y.trim())) set.add(y.trim());
+  });
   rows.forEach((r) => {
     const y = extractYearFromDate(r.date);
     if (y) set.add(y);
   });
-  return Array.from(set).sort((a, b) => Number(b) - Number(a));
+  return Array.from(set).sort((a, b) => Number(a) - Number(b));
 }
 
 export function sortMonthsChronologically(months: string[]): string[] {
@@ -269,8 +277,10 @@ export interface TaxCalculationInput {
   mode?: LedgerMode;
   category: TransactionCategory;
   privateOrGovt: EntityType;
-  taxStatus: TaxStatus;
-  amount: number | null;
+  taxStatus?: TaxStatus;
+  amount?: number | null;
+  nonVatAmount?: number | null;
+  grossAmount?: number | null;
   applyGovtVat5: boolean;
   withholdingAgent?: YesNo; // Used in PURCHASES mode
 }
@@ -293,32 +303,56 @@ export function calculateRowTaxes(input: TaxCalculationInput): TaxCalculationRes
     mode = 'SALES',
     category,
     privateOrGovt,
-    taxStatus,
-    amount,
+    taxStatus = 'VATABLE',
+    amount = null,
+    nonVatAmount,
+    grossAmount,
     applyGovtVat5,
     withholdingAgent = 'YES',
   } = input;
-  const cleanAmount = amount !== null && Number.isFinite(amount) && amount > 0 ? round2(amount) : null;
 
-  let nonVatExempt: number | null = null;
+  let cleanNonVat: number | null = null;
+  let cleanGross: number | null = null;
+
+  if (nonVatAmount !== undefined || grossAmount !== undefined) {
+    cleanNonVat =
+      nonVatAmount !== null && nonVatAmount !== undefined && Number.isFinite(nonVatAmount) && nonVatAmount > 0
+        ? round2(nonVatAmount)
+        : null;
+    cleanGross =
+      grossAmount !== null && grossAmount !== undefined && Number.isFinite(grossAmount) && grossAmount > 0
+        ? round2(grossAmount)
+        : null;
+  } else {
+    const cleanAmount =
+      amount !== null && amount !== undefined && Number.isFinite(amount) && amount > 0
+        ? round2(amount)
+        : null;
+    if (taxStatus === 'VATABLE') {
+      cleanGross = cleanAmount;
+    } else {
+      cleanNonVat = cleanAmount;
+    }
+  }
+
+  const nonVatExempt: number | null = cleanNonVat;
   let grossOfVat: number | null = null;
   let netOfVat: number | null = null;
   let vat: number | null = null;
   let total: number | null = null;
   let taxBase = 0;
 
-  if (cleanAmount !== null) {
-    if (taxStatus === 'VATABLE') {
-      grossOfVat = cleanAmount;
-      netOfVat = round2(cleanAmount / 1.12);
-      vat = round2(cleanAmount - netOfVat);
-      total = cleanAmount;
-      taxBase = netOfVat;
-    } else {
-      nonVatExempt = cleanAmount;
-      total = cleanAmount;
-      taxBase = nonVatExempt;
-    }
+  if (cleanGross !== null) {
+    grossOfVat = cleanGross;
+    netOfVat = round2(cleanGross / 1.12);
+    vat = round2(cleanGross - netOfVat);
+    taxBase = round2(taxBase + netOfVat);
+  }
+  if (cleanNonVat !== null) {
+    taxBase = round2(taxBase + cleanNonVat);
+  }
+  if (cleanNonVat !== null || cleanGross !== null) {
+    total = round2((cleanNonVat ?? 0) + (cleanGross ?? 0));
   }
 
   let wtGoods1: number | null = null;
@@ -377,14 +411,12 @@ export function getRowExpectedActual(row: LedgerRow, mode: LedgerMode = 'SALES')
 }
 
 export function recalculateExistingRow(row: LedgerRow, mode: LedgerMode = 'SALES'): LedgerRow {
-  const isVatable = (row.grossOfVat ?? 0) > 0;
-  const amount = isVatable ? row.grossOfVat : row.nonVatExempt;
   const calc = calculateRowTaxes({
     mode,
     category: row.category,
     privateOrGovt: row.privateOrGovt,
-    taxStatus: isVatable ? 'VATABLE' : 'NON_VAT',
-    amount,
+    nonVatAmount: row.nonVatExempt,
+    grossAmount: row.grossOfVat,
     applyGovtVat5: mode === 'SALES' && row.privateOrGovt === 'GOVT' ? row.applyGovtVat5 : false,
     withholdingAgent: row.withholdingAgent ?? 'YES',
   });
@@ -470,18 +502,18 @@ export function auditRow(row: LedgerRow, mode: LedgerMode = 'SALES'): AuditIssue
     });
   }
 
-  const isVatable = (row.grossOfVat ?? 0) > 0;
+  const hasGross = (row.grossOfVat ?? 0) > 0;
   const expected = calculateRowTaxes({
     mode,
     category: row.category,
     privateOrGovt: row.privateOrGovt,
-    taxStatus: isVatable ? 'VATABLE' : 'NON_VAT',
-    amount: isVatable ? row.grossOfVat : row.nonVatExempt,
+    nonVatAmount: row.nonVatExempt,
+    grossAmount: row.grossOfVat,
     applyGovtVat5: mode === 'SALES' && row.privateOrGovt === 'GOVT' ? row.applyGovtVat5 : false,
     withholdingAgent: row.withholdingAgent ?? 'YES',
   });
 
-  if (isVatable && row.grossOfVat !== null) {
+  if (hasGross && row.grossOfVat !== null) {
     const netPlusVat = round2((row.netOfVat ?? 0) + (row.vat ?? 0));
     if (Math.abs(netPlusVat - row.grossOfVat) > 0.05) {
       issues.push({
@@ -492,25 +524,16 @@ export function auditRow(row: LedgerRow, mode: LedgerMode = 'SALES'): AuditIssue
         canAutoFix: true,
       });
     }
-    if (row.total !== null && Math.abs(row.total - row.grossOfVat) > 0.05) {
-      issues.push({
-        code: 'MATH_TOTAL_MISMATCH',
-        severity: 'warning',
-        field: 'total',
-        message: `Total (${formatAccounting(row.total)}) differs from Gross of VAT (${formatAccounting(row.grossOfVat)})`,
-        canAutoFix: true,
-      });
-    }
-  } else if (row.nonVatExempt !== null && row.total !== null) {
-    if (Math.abs(row.total - row.nonVatExempt) > 0.05) {
-      issues.push({
-        code: 'MATH_TOTAL_MISMATCH',
-        severity: 'warning',
-        field: 'total',
-        message: `Total (${formatAccounting(row.total)}) differs from Non-VAT (${formatAccounting(row.nonVatExempt)})`,
-        canAutoFix: true,
-      });
-    }
+  }
+  const expectedTotalAmount = round2((row.nonVatExempt ?? 0) + (row.grossOfVat ?? 0));
+  if (expectedTotalAmount > 0 && row.total !== null && Math.abs(row.total - expectedTotalAmount) > 0.05) {
+    issues.push({
+      code: 'MATH_TOTAL_MISMATCH',
+      severity: 'warning',
+      field: 'total',
+      message: `Total (${formatAccounting(row.total)}) differs from Non-VAT + Gross (${formatAccounting(expectedTotalAmount)})`,
+      canAutoFix: true,
+    });
   }
 
   const expectedTotalWht =

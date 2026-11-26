@@ -7,7 +7,24 @@ import {
   upgradeTinRecords,
 } from '@/data/seedData';
 import { hashPassword, verifyPassword } from '@/lib/crypto';
+import {
+  AUTH_RATE_LIMIT,
+  PASSWORD_CHANGE_RATE_LIMIT,
+  assertWithinRateLimit,
+  clearRateLimit,
+  recordRateLimitFailure,
+} from '@/lib/rateLimit';
 import { createEphemeralSignUpClient, isSupabaseConfigured, supabase } from '@/lib/supabase';
+import {
+  adminBootstrapSchema,
+  assignCredentialsSchema,
+  changePasswordSchema,
+  clientDirectoryInputSchema,
+  ledgerRowSchema,
+  stripControlChars,
+  tinRecordSchema,
+  vaultMetadataInputSchema,
+} from '@/lib/validation';
 import {
   VAULT_BUCKET,
   previewXlsxFirst20Rows,
@@ -358,6 +375,61 @@ function savePreviewUsers(users: StoredPreviewUser[]): void {
 }
 
 // ----------------------------------------------------------------------------
+// Active Session & Authorization Context (RBAC + Tenant IDOR Guards)
+// ----------------------------------------------------------------------------
+
+let activeSessionUser: UserProfile | null = null;
+
+export function setActiveSessionUser(user: UserProfile | null): void {
+  activeSessionUser = user;
+}
+
+async function resolveCurrentSessionUser(): Promise<UserProfile | null> {
+  if (isSupabaseConfigured && supabase) {
+    const { data } = await supabase.auth.getUser();
+    if (!data.user) return null;
+    if (activeSessionUser && activeSessionUser.id === data.user.id) {
+      return activeSessionUser;
+    }
+    const { data: profileRow } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .eq('id', data.user.id)
+      .maybeSingle();
+    if (!profileRow) return null;
+    const mapped = mapUserProfileFromDb(profileRow as Record<string, unknown>);
+    activeSessionUser = mapped;
+    return mapped;
+  }
+  return activeSessionUser;
+}
+
+async function requireAuthenticatedUser(): Promise<UserProfile> {
+  const user = await resolveCurrentSessionUser();
+  if (!user) {
+    throw new Error('Authentication required. Please sign in.');
+  }
+  return user;
+}
+
+async function requireAdminUser(): Promise<UserProfile> {
+  const user = await requireAuthenticatedUser();
+  if (user.role !== 'admin') {
+    throw new Error('Administrator authorization required.');
+  }
+  return user;
+}
+
+async function requireDirectoryAccess(clientDirectoryId: string): Promise<UserProfile> {
+  const user = await requireAuthenticatedUser();
+  if (user.role === 'admin') return user;
+  if (!user.clientDirectoryId || user.clientDirectoryId !== clientDirectoryId) {
+    throw new Error('Unauthorized: access restricted to your assigned client directory.');
+  }
+  return user;
+}
+
+// ----------------------------------------------------------------------------
 // Auth & User Profile Operations
 // ----------------------------------------------------------------------------
 
@@ -377,20 +449,21 @@ export async function registerFirstPreviewAdmin(params: {
   if (isSupabaseConfigured) {
     throw new Error('First-run local setup is disabled when connected to Supabase.');
   }
+  const parsed = adminBootstrapSchema.safeParse(params);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message || 'Invalid administrator setup details.');
+  }
   const users = loadPreviewUsers();
   if (users.some((u) => u.role === 'admin')) {
     throw new Error('An administrator account already exists. Please sign in.');
   }
-  const cleanEmail = params.email.trim().toLowerCase();
-  if (!cleanEmail || !params.password || params.password.length < 8) {
-    throw new Error('Enter a valid email and a password of at least 8 characters.');
-  }
-  const { hash, salt } = await hashPassword(params.password);
+  const cleanEmail = parsed.data.email.toLowerCase();
+  const { hash, salt } = await hashPassword(parsed.data.password);
   const now = new Date().toISOString();
   const created: StoredPreviewUser = {
     id: toUuidLikeId(),
     email: cleanEmail,
-    fullName: params.fullName.trim() || 'Lead Tax Administrator',
+    fullName: parsed.data.fullName || 'Lead Tax Administrator',
     role: 'admin',
     clientDirectoryId: null,
     passwordHash: hash,
@@ -399,7 +472,7 @@ export async function registerFirstPreviewAdmin(params: {
     updatedAt: now,
   };
   savePreviewUsers([created, ...users]);
-  return {
+  const profile: UserProfile = {
     id: created.id,
     email: created.email,
     fullName: created.fullName,
@@ -408,23 +481,36 @@ export async function registerFirstPreviewAdmin(params: {
     createdAt: created.createdAt,
     updatedAt: created.updatedAt,
   };
+  activeSessionUser = profile;
+  return profile;
 }
 
 export async function authenticatePreviewUser(
-  email: string,
+  identifier: string,
   password: string
 ): Promise<UserProfile> {
-  const cleanEmail = email.trim().toLowerCase();
+  const cleanId = stripControlChars(identifier).toLowerCase();
+  const rateKey = `preview_login:${cleanId || 'anonymous'}`;
+  assertWithinRateLimit(rateKey, AUTH_RATE_LIMIT);
+
   const users = loadPreviewUsers();
-  const match = users.find((u) => u.email.toLowerCase() === cleanEmail);
+  const match = users.find(
+    (u) =>
+      u.email.toLowerCase() === cleanId ||
+      u.email.toLowerCase().split('@')[0] === cleanId ||
+      u.fullName.trim().toLowerCase() === cleanId
+  );
   if (!match) {
-    throw new Error('Invalid email or password.');
+    recordRateLimitFailure(rateKey, AUTH_RATE_LIMIT);
+    throw new Error('Invalid username or password.');
   }
   const valid = await verifyPassword(password, match.passwordHash, match.passwordSalt);
   if (!valid) {
-    throw new Error('Invalid email or password.');
+    recordRateLimitFailure(rateKey, AUTH_RATE_LIMIT);
+    throw new Error('Invalid username or password.');
   }
-  return {
+  clearRateLimit(rateKey);
+  const profile: UserProfile = {
     id: match.id,
     email: match.email,
     fullName: match.fullName,
@@ -433,6 +519,73 @@ export async function authenticatePreviewUser(
     createdAt: match.createdAt,
     updatedAt: match.updatedAt,
   };
+  activeSessionUser = profile;
+  return profile;
+}
+
+export async function changeOwnPassword(params: {
+  userId: string;
+  currentPassword: string;
+  newPassword: string;
+}): Promise<void> {
+  const parsed = changePasswordSchema.safeParse(params);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message || 'Invalid password payload.');
+  }
+  const sessionUser = await requireAuthenticatedUser();
+  if (sessionUser.id !== parsed.data.userId) {
+    throw new Error('Unauthorized: you can only change your own password.');
+  }
+  const rateKey = `pw_change:${sessionUser.id}`;
+  assertWithinRateLimit(rateKey, PASSWORD_CHANGE_RATE_LIMIT);
+
+  if (!isSupabaseConfigured || !supabase) {
+    const users = loadPreviewUsers();
+    const idx = users.findIndex((u) => u.id === sessionUser.id);
+    if (idx < 0) {
+      throw new Error('User account not found.');
+    }
+    const valid = await verifyPassword(
+      parsed.data.currentPassword,
+      users[idx].passwordHash,
+      users[idx].passwordSalt
+    );
+    if (!valid) {
+      recordRateLimitFailure(rateKey, PASSWORD_CHANGE_RATE_LIMIT);
+      throw new Error('Current password is incorrect.');
+    }
+    clearRateLimit(rateKey);
+    const { hash, salt } = await hashPassword(parsed.data.newPassword);
+    users[idx] = {
+      ...users[idx],
+      passwordHash: hash,
+      passwordSalt: salt,
+      updatedAt: new Date().toISOString(),
+    };
+    savePreviewUsers(users);
+    return;
+  }
+
+  const { data: userData } = await supabase.auth.getUser();
+  const authEmail = userData.user?.email;
+  if (!authEmail || userData.user?.id !== sessionUser.id) {
+    throw new Error('Unable to verify active session.');
+  }
+  const { error: verifyErr } = await supabase.auth.signInWithPassword({
+    email: authEmail,
+    password: parsed.data.currentPassword,
+  });
+  if (verifyErr) {
+    recordRateLimitFailure(rateKey, PASSWORD_CHANGE_RATE_LIMIT);
+    throw new Error('Current password is incorrect.');
+  }
+  clearRateLimit(rateKey);
+  const { error: updateErr } = await supabase.auth.updateUser({
+    password: parsed.data.newPassword,
+  });
+  if (updateErr) {
+    throw new Error(updateErr.message || 'Unable to update password.');
+  }
 }
 
 export async function fetchUserProfileById(userId: string): Promise<UserProfile | null> {
@@ -462,6 +615,7 @@ export async function fetchUserProfileById(userId: string): Promise<UserProfile 
 }
 
 export async function listClientUsers(): Promise<UserProfile[]> {
+  await requireAdminUser();
   if (!isSupabaseConfigured || !supabase) {
     return loadPreviewUsers().map((u) => ({
       id: u.id,
@@ -488,10 +642,16 @@ export async function listClientUsers(): Promise<UserProfile[]> {
 // ----------------------------------------------------------------------------
 
 export async function listClientDirectories(): Promise<ClientDirectory[]> {
+  const sessionUser = await requireAuthenticatedUser();
+
   if (!isSupabaseConfigured || !supabase) {
     const { clients, metaMap } = ensurePreviewDirectoriesBootstrapped();
     const users = loadPreviewUsers();
-    return clients.map((c) => {
+    const visibleClients =
+      sessionUser.role === 'admin'
+        ? clients
+        : clients.filter((c) => c.id === sessionUser.clientDirectoryId);
+    return visibleClients.map((c) => {
       const meta = metaMap[c.id];
       const assigned = users.find((u) => u.clientDirectoryId === c.id && u.role === 'client');
       return {
@@ -512,7 +672,9 @@ export async function listClientDirectories(): Promise<ClientDirectory[]> {
 
   const [{ data: dirs, error }, { data: profiles }] = await Promise.all([
     supabase.from('client_directories').select('*').order('created_at', { ascending: false }),
-    supabase.from('user_profiles').select('email, client_directory_id, role').eq('role', 'client'),
+    sessionUser.role === 'admin'
+      ? supabase.from('user_profiles').select('email, client_directory_id, role').eq('role', 'client')
+      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
   ]);
 
   if (error) {
@@ -534,6 +696,7 @@ export async function listClientDirectories(): Promise<ClientDirectory[]> {
 }
 
 export async function getClientDirectoryById(clientId: string): Promise<ClientDirectory | null> {
+  await requireDirectoryAccess(clientId);
   if (!isSupabaseConfigured || !supabase) {
     const all = await listClientDirectories();
     return all.find((c) => c.id === clientId) ?? null;
@@ -560,17 +723,23 @@ export async function createClientDirectoryWithCredentials(params: {
   password?: string;
   includeSampleRows?: boolean;
 }): Promise<{ directory: ClientDirectory; credentialNotice?: string }> {
-  const cleanCompany = params.companyName.trim().toUpperCase();
-  const cleanTrade = params.tradeName.trim().toUpperCase();
-  const formattedTin = formatTin(normalizeTinDigits(params.tin)) || params.tin.trim();
-  const cleanRdo = params.rdoCode.trim().toUpperCase();
+  await requireAdminUser();
+  const parsed = clientDirectoryInputSchema.safeParse(params);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message || 'Invalid client directory data.');
+  }
+
+  const cleanCompany = parsed.data.companyName.toUpperCase();
+  const cleanTrade = parsed.data.tradeName.toUpperCase();
+  const formattedTin = formatTin(normalizeTinDigits(parsed.data.tin)) || parsed.data.tin;
+  const cleanRdo = parsed.data.rdoCode.toUpperCase();
   const baseSlug = slugifyClientName(cleanCompany);
 
-  if (params.assignLogin) {
-    const email = (params.email ?? '').trim().toLowerCase();
-    const pw = params.password ?? '';
-    if (!email || !email.includes('@')) {
-      throw new Error('Provide a valid login email for the client account.');
+  if (parsed.data.assignLogin) {
+    const username = (parsed.data.email ?? '').trim().toLowerCase();
+    const pw = parsed.data.password ?? '';
+    if (!username) {
+      throw new Error('Provide a valid username for the client account.');
     }
     if (pw.length < 8) {
       throw new Error('Client login password must be at least 8 characters.');
@@ -674,9 +843,12 @@ export async function createClientDirectoryWithCredentials(params: {
     if (!ephemeral) {
       throw new Error('Supabase client unavailable for user provisioning.');
     }
-    const cleanEmail = params.email.trim().toLowerCase();
+    const cleanInput = params.email.trim().toLowerCase();
+    const authEmail = cleanInput.includes('@')
+      ? cleanInput
+      : `${cleanInput.replace(/[^a-z0-9._-]/g, '')}@npb-portal.local`;
     const { data: signUpData, error: signUpError } = await ephemeral.auth.signUp({
-      email: cleanEmail,
+      email: authEmail,
       password: params.password,
       options: {
         data: {
@@ -692,14 +864,17 @@ export async function createClientDirectoryWithCredentials(params: {
     }
 
     if (signUpData.user?.id) {
-      await supabase.from('user_profiles').upsert({
+      const { error: upsertErr } = await supabase.from('user_profiles').upsert({
         id: signUpData.user.id,
-        email: cleanEmail,
+        email: cleanInput,
         full_name: cleanCompany,
         role: 'client',
         client_directory_id: directory.id,
       });
-      directory.assignedEmail = cleanEmail;
+      if (upsertErr) {
+        throw new Error(`Directory created, but profile link failed: ${upsertErr.message}`);
+      }
+      directory.assignedEmail = cleanInput;
       if (!signUpData.session) {
         credentialNotice =
           'Client login created. If Supabase email confirmation is enabled, verify the email before first client login.';
@@ -714,35 +889,60 @@ export async function assignClientLoginCredentials(params: {
   clientDirectoryId: string;
   companyName: string;
   email: string;
-  password: string;
+  password?: string;
 }): Promise<string | undefined> {
-  const cleanEmail = params.email.trim().toLowerCase();
-  if (!cleanEmail || !cleanEmail.includes('@')) {
-    throw new Error('Enter a valid client email address.');
+  await requireAdminUser();
+  const parsed = assignCredentialsSchema.safeParse(params);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message || 'Enter a valid client username.');
   }
-  if (params.password.length < 8) {
-    throw new Error('Password must be at least 8 characters.');
-  }
+  const cleanUsername = parsed.data.email.toLowerCase();
+  const nextPassword = parsed.data.password ?? '';
 
   if (!isSupabaseConfigured || !supabase) {
     const users = loadPreviewUsers();
     const now = new Date().toISOString();
-    const { hash, salt } = await hashPassword(params.password);
-    const existingIdx = users.findIndex((u) => u.email.toLowerCase() === cleanEmail);
+    const existingIdx = users.findIndex(
+      (u) =>
+        u.clientDirectoryId === params.clientDirectoryId ||
+        u.email.toLowerCase() === cleanUsername
+    );
+    const conflict = users.find(
+      (u, idx) => idx !== existingIdx && u.email.toLowerCase() === cleanUsername
+    );
+    if (conflict) {
+      throw new Error(`Username "${cleanUsername}" is already assigned to another account.`);
+    }
+
     if (existingIdx >= 0) {
+      if (nextPassword && nextPassword.length < 8) {
+        throw new Error('Password must be at least 8 characters.');
+      }
+      let passwordHash = users[existingIdx].passwordHash;
+      let passwordSalt = users[existingIdx].passwordSalt;
+      if (nextPassword) {
+        const hashed = await hashPassword(nextPassword);
+        passwordHash = hashed.hash;
+        passwordSalt = hashed.salt;
+      }
       users[existingIdx] = {
         ...users[existingIdx],
+        email: cleanUsername,
         role: 'client',
         clientDirectoryId: params.clientDirectoryId,
         fullName: params.companyName,
-        passwordHash: hash,
-        passwordSalt: salt,
+        passwordHash,
+        passwordSalt,
         updatedAt: now,
       };
     } else {
+      if (nextPassword.length < 8) {
+        throw new Error('Password must be at least 8 characters.');
+      }
+      const { hash, salt } = await hashPassword(nextPassword);
       users.unshift({
         id: toUuidLikeId(),
-        email: cleanEmail,
+        email: cleanUsername,
         fullName: params.companyName,
         role: 'client',
         clientDirectoryId: params.clientDirectoryId,
@@ -756,11 +956,17 @@ export async function assignClientLoginCredentials(params: {
     return undefined;
   }
 
+  if (nextPassword.length < 8) {
+    throw new Error('Password must be at least 8 characters.');
+  }
   const ephemeral = createEphemeralSignUpClient();
   if (!ephemeral) throw new Error('Supabase client unavailable.');
+  const authEmail = cleanUsername.includes('@')
+    ? cleanUsername
+    : `${cleanUsername.replace(/[^a-z0-9._-]/g, '')}@npb-portal.local`;
   const { data: signUpData, error: signUpError } = await ephemeral.auth.signUp({
-    email: cleanEmail,
-    password: params.password,
+    email: authEmail,
+    password: nextPassword,
     options: {
       data: {
         role: 'client',
@@ -772,13 +978,16 @@ export async function assignClientLoginCredentials(params: {
   if (signUpError) throw new Error(signUpError.message);
 
   if (signUpData.user?.id) {
-    await supabase.from('user_profiles').upsert({
+    const { error: upsertErr } = await supabase.from('user_profiles').upsert({
       id: signUpData.user.id,
-      email: cleanEmail,
+      email: cleanUsername,
       full_name: params.companyName,
       role: 'client',
       client_directory_id: params.clientDirectoryId,
     });
+    if (upsertErr) {
+      throw new Error(`User created, but profile assignment failed: ${upsertErr.message}`);
+    }
     if (!signUpData.session) {
       return 'Client user provisioned. Confirm email in Supabase if email verification is active.';
     }
@@ -787,6 +996,7 @@ export async function assignClientLoginCredentials(params: {
 }
 
 export async function deleteClientDirectory(clientId: string): Promise<void> {
+  await requireAdminUser();
   if (!isSupabaseConfigured || !supabase) {
     const { clients, metaMap } = ensurePreviewDirectoriesBootstrapped();
     const remaining = clients.filter((c) => c.id !== clientId);
@@ -830,6 +1040,7 @@ export interface ClientLedgerBundle {
 }
 
 export async function loadClientLedgerBundle(clientId: string): Promise<ClientLedgerBundle> {
+  await requireDirectoryAccess(clientId);
   if (!isSupabaseConfigured || !supabase) {
     const ws = loadClientWorkspace(clientId);
     const expenseRows = upgradePurchasesRows(
@@ -896,23 +1107,39 @@ export async function saveClientLedgerRows(params: {
   userId?: string;
 }): Promise<LedgerRow[]> {
   const { clientId, entryKind, rows, userId } = params;
-  const normalized = rows.map((r) => ({ ...r, entryKind }));
+  const sessionUser = await requireDirectoryAccess(clientId);
+  const validated = rows.map((r) => {
+    const res = ledgerRowSchema.safeParse(r);
+    if (!res.success) {
+      throw new Error(res.error.issues[0]?.message || 'Invalid ledger row data.');
+    }
+    return {
+      ...res.data,
+      entryKind,
+      auditStatus:
+        sessionUser.role === 'admin'
+          ? (res.data.auditStatus ?? 'PENDING')
+          : res.data.auditStatus === 'APPROVED'
+          ? 'PENDING'
+          : (res.data.auditStatus ?? 'PENDING'),
+    } as LedgerRow;
+  });
 
   if (!isSupabaseConfigured || !supabase) {
     const keys = getClientStorageKeys(clientId);
-    if (entryKind === 'SALES') safeSaveJson(keys.SALES, normalized);
-    else if (entryKind === 'PURCHASES') safeSaveJson(keys.PURCHASES, normalized);
-    else safeSaveJson(`${PORTAL_KEYS.EXPENSE_ROWS_PREFIX}${clientId}`, normalized);
-    return normalized;
+    if (entryKind === 'SALES') safeSaveJson(keys.SALES, validated);
+    else if (entryKind === 'PURCHASES') safeSaveJson(keys.PURCHASES, validated);
+    else safeSaveJson(`${PORTAL_KEYS.EXPENSE_ROWS_PREFIX}${clientId}`, validated);
+    return validated;
   }
 
   // Upsert rows for this entryKind and client directory
-  if (normalized.length > 0) {
-    const payload = normalized.map((r) => mapLedgerRowToDb(r, clientId, entryKind, userId));
+  if (validated.length > 0) {
+    const payload = validated.map((r) => mapLedgerRowToDb(r, clientId, entryKind, userId ?? sessionUser.id));
     const { error } = await supabase.from('ledger_entries').upsert(payload, { onConflict: 'id' });
     if (error) throw new Error(error.message);
   }
-  return normalized;
+  return validated;
 }
 
 export async function upsertSingleLedgerRows(params: {
@@ -921,18 +1148,31 @@ export async function upsertSingleLedgerRows(params: {
   rows: LedgerRow[];
   userId?: string;
 }): Promise<LedgerRow[]> {
-  const withIds = params.rows.map((r) => ({
-    ...r,
-    id: r.id.startsWith('row-') ? toUuidLikeId() : r.id,
-    entryKind: params.entryKind,
-  }));
+  const sessionUser = await requireDirectoryAccess(params.clientId);
+  const withIds = params.rows.map((r) => {
+    const res = ledgerRowSchema.safeParse(r);
+    if (!res.success) {
+      throw new Error(res.error.issues[0]?.message || 'Invalid ledger entry.');
+    }
+    return {
+      ...res.data,
+      id: res.data.id.startsWith('row-') ? toUuidLikeId() : res.data.id,
+      entryKind: params.entryKind,
+      auditStatus:
+        sessionUser.role === 'admin'
+          ? (res.data.auditStatus ?? 'PENDING')
+          : res.data.auditStatus === 'APPROVED'
+          ? 'PENDING'
+          : (res.data.auditStatus ?? 'PENDING'),
+    } as LedgerRow;
+  });
 
   if (!isSupabaseConfigured || !supabase) {
     return withIds;
   }
 
   const payload = withIds.map((r) =>
-    mapLedgerRowToDb(r, params.clientId, params.entryKind, params.userId)
+    mapLedgerRowToDb(r, params.clientId, params.entryKind, params.userId ?? sessionUser.id)
   );
   const { data, error } = await supabase
     .from('ledger_entries')
@@ -944,8 +1184,16 @@ export async function upsertSingleLedgerRows(params: {
 }
 
 export async function deleteLedgerRowRemote(rowId: string): Promise<void> {
+  const sessionUser = await requireAuthenticatedUser();
   if (!isSupabaseConfigured || !supabase) return;
-  const { error } = await supabase.from('ledger_entries').delete().eq('id', rowId);
+  let query = supabase.from('ledger_entries').delete().eq('id', rowId);
+  if (sessionUser.role !== 'admin') {
+    if (!sessionUser.clientDirectoryId) {
+      throw new Error('Unauthorized: no client directory assigned.');
+    }
+    query = query.eq('client_directory_id', sessionUser.clientDirectoryId);
+  }
+  const { error } = await query;
   if (error) throw new Error(error.message);
 }
 
@@ -954,6 +1202,7 @@ export async function clearLedgerRowsPeriodRemote(
   entryKind: LedgerEntryKind,
   idsToDelete: string[]
 ): Promise<void> {
+  await requireDirectoryAccess(clientId);
   if (!isSupabaseConfigured || !supabase || idsToDelete.length === 0) return;
   const { error } = await supabase
     .from('ledger_entries')
@@ -969,10 +1218,11 @@ export async function updateLedgerAuditStatus(
   auditStatus: AuditStatus,
   auditNote = ''
 ): Promise<void> {
+  await requireAdminUser();
   if (!isSupabaseConfigured || !supabase) return;
   const { error } = await supabase
     .from('ledger_entries')
-    .update({ audit_status: auditStatus, audit_note: auditNote })
+    .update({ audit_status: auditStatus, audit_note: stripControlChars(auditNote).slice(0, 500) })
     .eq('id', rowId);
   if (error) throw new Error(error.message);
 }
@@ -981,14 +1231,22 @@ export async function saveClientTinDirectory(
   clientId: string,
   records: TinRecord[]
 ): Promise<void> {
+  await requireDirectoryAccess(clientId);
+  const validated = records.map((r) => {
+    const res = tinRecordSchema.safeParse(r);
+    if (!res.success) {
+      throw new Error(res.error.issues[0]?.message || 'Invalid TIN directory record.');
+    }
+    return res.data as TinRecord;
+  });
   if (!isSupabaseConfigured || !supabase) {
     const keys = getClientStorageKeys(clientId);
-    safeSaveJson(keys.TINS, records);
+    safeSaveJson(keys.TINS, validated);
     return;
   }
 
-  if (records.length === 0) return;
-  const payload = records
+  if (validated.length === 0) return;
+  const payload = validated
     .filter((r) => Boolean(r.digits))
     .map((r) => ({
       client_directory_id: clientId,
@@ -1014,6 +1272,7 @@ export async function saveClientTinDirectory(
 }
 
 export async function deleteClientTinRecordRemote(clientId: string, record: TinRecord): Promise<void> {
+  await requireDirectoryAccess(clientId);
   if (!isSupabaseConfigured || !supabase) return;
   const { error } = await supabase
     .from('tin_directory')
@@ -1028,6 +1287,7 @@ export async function seedSampleRowsForClient(clientId: string): Promise<{
   purchasesRows: LedgerRow[];
   tinDirectory: TinRecord[];
 }> {
+  await requireDirectoryAccess(clientId);
   const salesRows = SEED_SALES_ROWS.map((r) => ({
     ...r,
     id: toUuidLikeId(),
@@ -1059,11 +1319,19 @@ export async function seedSampleRowsForClient(clientId: string): Promise<{
 // ----------------------------------------------------------------------------
 
 export async function listVaultFiles(clientDirectoryId?: string): Promise<VaultXlsxFile[]> {
+  const sessionUser = await requireAuthenticatedUser();
+  const scopedClientId =
+    sessionUser.role === 'admin' ? clientDirectoryId : sessionUser.clientDirectoryId ?? '__none__';
+
+  if (clientDirectoryId && sessionUser.role !== 'admin' && clientDirectoryId !== sessionUser.clientDirectoryId) {
+    throw new Error('Unauthorized: cannot list vault files for another client directory.');
+  }
+
   if (!isSupabaseConfigured || !supabase) {
     ensurePreviewDirectoriesBootstrapped();
     const all = safeLoadJson<VaultXlsxFile[]>(PORTAL_KEYS.VAULT_FILES, []);
-    return clientDirectoryId
-      ? all.filter((f) => f.clientDirectoryId === clientDirectoryId)
+    return scopedClientId
+      ? all.filter((f) => f.clientDirectoryId === scopedClientId)
       : all;
   }
 
@@ -1072,8 +1340,8 @@ export async function listVaultFiles(clientDirectoryId?: string): Promise<VaultX
     .select('*')
     .order('created_at', { ascending: false });
 
-  if (clientDirectoryId) {
-    query = query.eq('client_directory_id', clientDirectoryId);
+  if (scopedClientId) {
+    query = query.eq('client_directory_id', scopedClientId);
   }
 
   const { data, error } = await query;
@@ -1084,11 +1352,21 @@ export async function listVaultFiles(clientDirectoryId?: string): Promise<VaultX
 export async function createVaultFileMetadata(
   input: Omit<VaultXlsxFile, 'id' | 'createdAt' | 'updatedAt'>
 ): Promise<VaultXlsxFile> {
+  await requireDirectoryAccess(input.clientDirectoryId);
+  const parsed = vaultMetadataInputSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message || 'Invalid vault file metadata.');
+  }
+  const clean = parsed.data;
+  if (!clean.storagePath.startsWith(`${sanitizeSegment(clean.clientDirectoryId, 'unassigned')}/`)) {
+    throw new Error('Storage path does not match target client directory.');
+  }
+
   const now = new Date().toISOString();
   if (!isSupabaseConfigured || !supabase) {
     const all = safeLoadJson<VaultXlsxFile[]>(PORTAL_KEYS.VAULT_FILES, []);
     const created: VaultXlsxFile = {
-      ...input,
+      ...clean,
       id: toUuidLikeId(),
       createdAt: now,
       updatedAt: now,
@@ -1100,20 +1378,20 @@ export async function createVaultFileMetadata(
   const { data, error } = await supabase
     .from('xlsx_files')
     .insert({
-      client_directory_id: input.clientDirectoryId,
-      file_name: input.fileName,
-      storage_path: input.storagePath,
-      bucket_name: input.bucketName,
-      size_bytes: input.sizeBytes,
-      tax_year: input.taxYear,
-      tax_period: input.taxPeriod,
-      entry_scope: input.entryScope,
-      sheet_name: input.sheetName ?? '',
-      preview_headers: input.previewHeaders,
-      preview_rows: input.previewRows,
-      uploaded_by: input.uploadedBy || null,
-      uploaded_by_email: input.uploadedByEmail,
-      notes: input.notes ?? '',
+      client_directory_id: clean.clientDirectoryId,
+      file_name: clean.fileName,
+      storage_path: clean.storagePath,
+      bucket_name: clean.bucketName,
+      size_bytes: clean.sizeBytes,
+      tax_year: clean.taxYear,
+      tax_period: clean.taxPeriod,
+      entry_scope: clean.entryScope,
+      sheet_name: clean.sheetName ?? '',
+      preview_headers: clean.previewHeaders,
+      preview_rows: clean.previewRows,
+      uploaded_by: clean.uploadedBy || null,
+      uploaded_by_email: clean.uploadedByEmail,
+      notes: clean.notes ?? '',
     })
     .select('*')
     .single();
@@ -1126,6 +1404,11 @@ export async function createVaultFileMetadata(
 }
 
 export async function deleteVaultFileRecord(file: VaultXlsxFile): Promise<void> {
+  const sessionUser = await requireDirectoryAccess(file.clientDirectoryId);
+  const isAutoManaged = file.storagePath.includes('/auto_');
+  if (sessionUser.role !== 'admin' && !isAutoManaged) {
+    throw new Error('Only administrators may permanently delete archived vault workbooks.');
+  }
   await removeVaultStorageObject(file.storagePath, file.bucketName);
 
   if (!isSupabaseConfigured || !supabase) {

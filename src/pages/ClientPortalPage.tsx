@@ -51,11 +51,11 @@ export const ClientPortalPage: React.FC = () => {
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[#E8F1FC] text-[#0B4DA2]">
             <FolderLock className="h-6 w-6" />
           </div>
-          <h1 className="mt-4 font-display text-lg font-bold text-slate-900">
+          <h1 className="mt-4 font-display text-lg font-bold leading-snug text-slate-900">
             No Client Directory Assigned
           </h1>
-          <p className="mt-2 text-xs text-slate-600 leading-relaxed">
-            Your account ({user?.email}) is not yet linked to a taxpayer directory. Ask your NPB CPA Administrator to assign your client directory in the Admin Portal.
+          <p className="mt-2 text-xs text-slate-600 leading-relaxed break-words">
+            Your account (<span className="break-all font-medium">{user?.email}</span>) is not yet linked to a taxpayer directory. Ask your NPB CPA Administrator to assign your client directory in the Admin Portal.
           </p>
           <button
             type="button"

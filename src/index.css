@@ -9,10 +9,17 @@
 @layer base {
   html {
     font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  body {
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
 
   h1, h2, h3, .font-display {
     font-family: var(--font-display);
+    line-height: 1.3;
   }
 }
 

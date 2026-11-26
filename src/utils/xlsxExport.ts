@@ -1,5 +1,6 @@
 import type { LedgerMode, LedgerRow } from '../types/tax';
-import { formatAccounting } from './taxEngine';
+import { neutralizeSpreadsheetFormula } from './csvCodec';
+import { formatAccounting, round2 } from './taxEngine';
 
 // Pure TypeScript CRC32 & uncompressed PKZIP builder (zero external deps, 100% offline)
 const CRC_TABLE = (() => {
@@ -123,14 +124,22 @@ interface CellSpec {
   row: number; // 1-indexed
   value: string | number | null;
   style: number;
+  formula?: string;
 }
 
 function renderCell(c: CellSpec): string {
   const ref = `${colLetter(c.col)}${c.row}`;
-  if (typeof c.value === 'number' && Number.isFinite(c.value) && c.value !== 0) {
-    return `<c r="${ref}" s="${c.style}"><v>${c.value}</v></c>`;
+  if (c.formula) {
+    const cached =
+      typeof c.value === 'number' && Number.isFinite(c.value)
+        ? `<v>${round2(c.value)}</v>`
+        : '';
+    return `<c r="${ref}" s="${c.style}"><f>${xmlEsc(c.formula)}</f>${cached}</c>`;
   }
-  const text = typeof c.value === 'number' || c.value === null ? '-' : c.value;
+  if (typeof c.value === 'number' && Number.isFinite(c.value)) {
+    return `<c r="${ref}" s="${c.style}"><v>${round2(c.value)}</v></c>`;
+  }
+  const text = c.value === null ? '-' : String(c.value);
   return `<c r="${ref}" s="${c.style}" t="inlineStr"><is><t>${xmlEsc(text)}</t></is></c>`;
 }
 
@@ -147,7 +156,7 @@ function renderCell(c: CellSpec): string {
 const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <numFmts count="1">
-    <numFmt numFmtId="164" formatCode="#,##0.00"/>
+    <numFmt numFmtId="164" formatCode="#,##0.00;(#,##0.00);&quot;-&quot;"/>
   </numFmts>
   <fonts count="2">
     <font><sz val="10"/><name val="Calibri"/><color rgb="FF000000"/></font>
@@ -246,7 +255,19 @@ function buildPurchasesSheetXml(rows: LedgerRow[]): string {
 
   rows.forEach((r, idx) => {
     const rowNum = idx + 4;
-    const numStyle = (v: number | null | undefined) => (v && v !== 0 ? 4 : 5);
+    const nonVat = round2(r.nonVatExempt ?? 0);
+    const gross = round2(r.grossOfVat ?? 0);
+    const whtAgent = r.withholdingAgent ?? 'NO';
+
+    const autoNet = gross > 0 ? round2(gross / 1.12) : 0;
+    const autoVat = gross > 0 ? round2(gross - autoNet) : 0;
+    const autoTotal = round2(nonVat + autoNet);
+    const autoWtGoods = r.category === 'GOODS' && whtAgent === 'YES' ? round2(autoTotal * 0.01) : 0;
+    const autoWtServices = r.category === 'SERVICES' && whtAgent === 'YES' ? round2(autoTotal * 0.02) : 0;
+    const autoWtRental = r.category === 'RENTAL' && whtAgent === 'YES' ? round2(autoTotal * 0.05) : 0;
+
+    const isManual = Boolean(r.manualOverride);
+
     const cells: CellSpec[] = [
       { col: 0, row: rowNum, value: r.date, style: 6 },
       { col: 1, row: rowNum, value: r.month, style: 6 },
@@ -261,15 +282,45 @@ function buildPurchasesSheetXml(rows: LedgerRow[]): string {
       { col: 10, row: rowNum, value: r.particular ?? '', style: 0 },
       { col: 11, row: rowNum, value: r.accountTitle ?? '', style: 0 },
       { col: 12, row: rowNum, value: r.category, style: 6 },
-      { col: 13, row: rowNum, value: r.withholdingAgent ?? 'NO', style: 6 },
-      { col: 14, row: rowNum, value: r.nonVatExempt, style: numStyle(r.nonVatExempt) },
-      { col: 15, row: rowNum, value: r.grossOfVat, style: numStyle(r.grossOfVat) },
-      { col: 16, row: rowNum, value: r.netOfVat, style: numStyle(r.netOfVat) },
-      { col: 17, row: rowNum, value: r.vat, style: numStyle(r.vat) },
-      { col: 18, row: rowNum, value: r.total, style: numStyle(r.total) },
-      { col: 19, row: rowNum, value: r.wtGoods1, style: numStyle(r.wtGoods1) },
-      { col: 20, row: rowNum, value: r.wtServices2, style: numStyle(r.wtServices2) },
-      { col: 21, row: rowNum, value: r.wtRental5, style: numStyle(r.wtRental5) },
+      { col: 13, row: rowNum, value: whtAgent, style: 6 },
+      { col: 14, row: rowNum, value: nonVat, style: 4 },
+      { col: 15, row: rowNum, value: gross, style: 4 },
+      isManual
+        ? { col: 16, row: rowNum, value: round2(r.netOfVat ?? 0), style: 4 }
+        : { col: 16, row: rowNum, value: autoNet, formula: `P${rowNum}/1.12`, style: 4 },
+      isManual
+        ? { col: 17, row: rowNum, value: round2(r.vat ?? 0), style: 4 }
+        : { col: 17, row: rowNum, value: autoVat, formula: `P${rowNum}-Q${rowNum}`, style: 4 },
+      isManual
+        ? { col: 18, row: rowNum, value: round2(r.total ?? 0), style: 4 }
+        : { col: 18, row: rowNum, value: autoTotal, formula: `O${rowNum}+Q${rowNum}`, style: 4 },
+      isManual
+        ? { col: 19, row: rowNum, value: round2(r.wtGoods1 ?? 0), style: 4 }
+        : {
+            col: 19,
+            row: rowNum,
+            value: autoWtGoods,
+            formula: `IF(AND(M${rowNum}="GOODS",N${rowNum}="YES"),S${rowNum}*1%,0)`,
+            style: 4,
+          },
+      isManual
+        ? { col: 20, row: rowNum, value: round2(r.wtServices2 ?? 0), style: 4 }
+        : {
+            col: 20,
+            row: rowNum,
+            value: autoWtServices,
+            formula: `IF(AND(M${rowNum}="SERVICES",N${rowNum}="YES"),S${rowNum}*2%,0)`,
+            style: 4,
+          },
+      isManual
+        ? { col: 21, row: rowNum, value: round2(r.wtRental5 ?? 0), style: 4 }
+        : {
+            col: 21,
+            row: rowNum,
+            value: autoWtRental,
+            formula: `IF(AND(M${rowNum}="RENTAL",N${rowNum}="YES"),S${rowNum}*5%,0)`,
+            style: 4,
+          },
     ];
     sheetRowsXml.push(`<row r="${rowNum}" ht="20" customHeight="1">${cells.map(renderCell).join('')}</row>`);
   });
@@ -351,7 +402,19 @@ function buildSalesSheetXml(rows: LedgerRow[]): string {
 
   rows.forEach((r, idx) => {
     const rowNum = idx + 4;
-    const numStyle = (v: number | null | undefined) => (v && v !== 0 ? 4 : 5);
+    const nonVat = round2(r.nonVatExempt ?? 0);
+    const gross = round2(r.grossOfVat ?? 0);
+
+    const autoNet = gross > 0 ? round2(gross / 1.12) : 0;
+    const autoVat = gross > 0 ? round2(gross - autoNet) : 0;
+    const autoTotal = round2(nonVat + autoNet);
+    const autoWtGoods = r.category === 'GOODS' ? round2(autoTotal * 0.01) : 0;
+    const autoWtServices = r.category === 'SERVICES' ? round2(autoTotal * 0.02) : 0;
+    const autoWtRental = r.category === 'RENTAL' ? round2(autoTotal * 0.05) : 0;
+    const autoWtVat5 = r.privateOrGovt === 'GOVT' && r.applyGovtVat5 ? round2(autoTotal * 0.05) : 0;
+
+    const isManual = Boolean(r.manualOverride);
+
     const cells: CellSpec[] = [
       { col: 0, row: rowNum, value: r.date, style: 6 },
       { col: 1, row: rowNum, value: r.month, style: 6 },
@@ -362,16 +425,56 @@ function buildSalesSheetXml(rows: LedgerRow[]): string {
       { col: 6, row: rowNum, value: r.address2 ?? '', style: 0 },
       { col: 7, row: rowNum, value: r.category, style: 6 },
       { col: 8, row: rowNum, value: r.privateOrGovt, style: 6 },
-      { col: 9, row: rowNum, value: r.nonVatExempt, style: numStyle(r.nonVatExempt) },
-      { col: 10, row: rowNum, value: r.grossOfVat, style: numStyle(r.grossOfVat) },
-      { col: 11, row: rowNum, value: r.netOfVat, style: numStyle(r.netOfVat) },
-      { col: 12, row: rowNum, value: r.vat, style: numStyle(r.vat) },
-      { col: 13, row: rowNum, value: r.total, style: numStyle(r.total) },
-      { col: 14, row: rowNum, value: r.wtGoods1, style: numStyle(r.wtGoods1) },
-      { col: 15, row: rowNum, value: r.wtServices2, style: numStyle(r.wtServices2) },
-      { col: 16, row: rowNum, value: r.wtRental5, style: numStyle(r.wtRental5) },
-      { col: 17, row: rowNum, value: r.wtVat5, style: numStyle(r.wtVat5) },
-      { col: 18, row: rowNum, value: r.actual, style: numStyle(r.actual) },
+      { col: 9, row: rowNum, value: nonVat, style: 4 },
+      { col: 10, row: rowNum, value: gross, style: 4 },
+      isManual
+        ? { col: 11, row: rowNum, value: round2(r.netOfVat ?? 0), style: 4 }
+        : { col: 11, row: rowNum, value: autoNet, formula: `K${rowNum}/1.12`, style: 4 },
+      isManual
+        ? { col: 12, row: rowNum, value: round2(r.vat ?? 0), style: 4 }
+        : { col: 12, row: rowNum, value: autoVat, formula: `K${rowNum}-L${rowNum}`, style: 4 },
+      isManual
+        ? { col: 13, row: rowNum, value: round2(r.total ?? 0), style: 4 }
+        : { col: 13, row: rowNum, value: autoTotal, formula: `J${rowNum}+L${rowNum}`, style: 4 },
+      isManual
+        ? { col: 14, row: rowNum, value: round2(r.wtGoods1 ?? 0), style: 4 }
+        : {
+            col: 14,
+            row: rowNum,
+            value: autoWtGoods,
+            formula: `IF(H${rowNum}="GOODS",N${rowNum}*1%,0)`,
+            style: 4,
+          },
+      isManual
+        ? { col: 15, row: rowNum, value: round2(r.wtServices2 ?? 0), style: 4 }
+        : {
+            col: 15,
+            row: rowNum,
+            value: autoWtServices,
+            formula: `IF(H${rowNum}="SERVICES",N${rowNum}*2%,0)`,
+            style: 4,
+          },
+      isManual
+        ? { col: 16, row: rowNum, value: round2(r.wtRental5 ?? 0), style: 4 }
+        : {
+            col: 16,
+            row: rowNum,
+            value: autoWtRental,
+            formula: `IF(H${rowNum}="RENTAL",N${rowNum}*5%,0)`,
+            style: 4,
+          },
+      isManual
+        ? { col: 17, row: rowNum, value: round2(r.wtVat5 ?? 0), style: 4 }
+        : r.privateOrGovt === 'GOVT' && !r.applyGovtVat5
+        ? { col: 17, row: rowNum, value: 0, style: 4 }
+        : {
+            col: 17,
+            row: rowNum,
+            value: autoWtVat5,
+            formula: `IF(I${rowNum}="GOVT",N${rowNum}*5%,0)`,
+            style: 4,
+          },
+      { col: 18, row: rowNum, value: r.actual !== null && r.actual !== undefined ? round2(r.actual) : 0, style: 4 },
       { col: 19, row: rowNum, value: r.remarks, style: 0 },
     ];
     sheetRowsXml.push(`<row r="${rowNum}" ht="20" customHeight="1">${cells.map(renderCell).join('')}</row>`);
@@ -416,6 +519,7 @@ export function buildFilingXlsxBlob(mode: LedgerMode, rows: LedgerRow[]): Blob {
   <sheets>
     <sheet name="${sheetName}" sheetId="1" r:id="rId1"/>
   </sheets>
+  <calcPr calcId="191029" fullCalcOnLoad="1"/>
 </workbook>`;
 
   const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -446,7 +550,16 @@ export function downloadXlsxBlob(filename: string, blob: Blob) {
 }
 
 function htmlEsc(s: string): string {
-  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return (s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeSheetCell(s: string): string {
+  return neutralizeSpreadsheetFormula(String(s ?? '').replace(/[\t\r\n]+/g, ' '));
 }
 
 /**
@@ -492,44 +605,7 @@ export async function copyFilingTableForGoogleSheets(
       .join('')}<th style="border:1px solid #000;font-weight:bold;text-align:center;">GOODS</th><th style="border:1px solid #000;font-weight:bold;text-align:center;">SERVICES</th><th style="border:1px solid #000;font-weight:bold;text-align:center;">RENTAL</th></tr>`;
     const h3 = `<tr><th style="border:1px solid #000;font-weight:bold;text-align:center;">1%</th><th style="border:1px solid #000;font-weight:bold;text-align:center;">2%</th><th style="border:1px solid #000;font-weight:bold;text-align:center;">5%</th></tr>`;
 
-    const bodyHtml = rows
-      .map((r) => {
-        const vals = [
-          r.date,
-          r.month,
-          r.branchTradeName,
-          r.payor,
-          r.payeeClassification ?? 'N/A',
-          r.tin,
-          r.address,
-          r.address2 ?? '',
-          r.supportingDocs ?? '',
-          r.referenceNo ?? '',
-          r.particular ?? '',
-          r.accountTitle ?? '',
-          r.category,
-          r.withholdingAgent ?? 'NO',
-          formatAccounting(r.nonVatExempt),
-          formatAccounting(r.grossOfVat),
-          formatAccounting(r.netOfVat),
-          formatAccounting(r.vat),
-          formatAccounting(r.total),
-          formatAccounting(r.wtGoods1),
-          formatAccounting(r.wtServices2),
-          formatAccounting(r.wtRental5),
-        ];
-        return `<tr>${vals
-          .map((v, i) => `<td style="border:1px solid #000;text-align:${i >= 14 ? 'right' : 'left'};">${htmlEsc(v)}</td>`)
-          .join('')}</tr>`;
-      })
-      .join('');
-
-    html = `<table style="border-collapse:collapse;"><thead>${h1}${h2}${h3}</thead><tbody>${bodyHtml}</tbody></table>`;
-
-    const tsv1 = ['PURCHASES', ...Array(18).fill(''), 'WITHHOLDING TAX', '', ''].join('\t');
-    const tsv2 = [...cols, 'GOODS', 'SERVICES', 'RENTAL'].join('\t');
-    const tsv3 = [...Array(19).fill(''), '1%', '2%', '5%'].join('\t');
-    const tsvBody = rows.map((r) =>
+    const buildPurchaseRowCells = (r: LedgerRow) =>
       [
         r.date,
         r.month,
@@ -553,8 +629,23 @@ export async function copyFilingTableForGoogleSheets(
         formatAccounting(r.wtGoods1),
         formatAccounting(r.wtServices2),
         formatAccounting(r.wtRental5),
-      ].join('\t')
-    );
+      ].map(safeSheetCell);
+
+    const bodyHtml = rows
+      .map((r) => {
+        const vals = buildPurchaseRowCells(r);
+        return `<tr>${vals
+          .map((v, i) => `<td style="border:1px solid #000;text-align:${i >= 14 ? 'right' : 'left'};">${htmlEsc(v)}</td>`)
+          .join('')}</tr>`;
+      })
+      .join('');
+
+    html = `<table style="border-collapse:collapse;"><thead>${h1}${h2}${h3}</thead><tbody>${bodyHtml}</tbody></table>`;
+
+    const tsv1 = ['PURCHASES', ...Array(18).fill(''), 'WITHHOLDING TAX', '', ''].join('\t');
+    const tsv2 = [...cols, 'GOODS', 'SERVICES', 'RENTAL'].join('\t');
+    const tsv3 = [...Array(19).fill(''), '1%', '2%', '5%'].join('\t');
+    const tsvBody = rows.map((r) => buildPurchaseRowCells(r).join('\t'));
     tsv = [tsv1, tsv2, tsv3, ...tsvBody].join('\n');
   } else {
     const cols = [
@@ -579,42 +670,7 @@ export async function copyFilingTableForGoogleSheets(
       .join('')}<th style="border:1px solid #000;font-weight:bold;text-align:center;">GOODS</th><th style="border:1px solid #000;font-weight:bold;text-align:center;">SERVICES</th><th style="border:1px solid #000;font-weight:bold;text-align:center;">RENTAL</th><th style="border:1px solid #000;font-weight:bold;text-align:center;">VAT</th></tr>`;
     const h3 = `<tr><th style="border:1px solid #000;font-weight:bold;text-align:center;">1%</th><th style="border:1px solid #000;font-weight:bold;text-align:center;">2%</th><th style="border:1px solid #000;font-weight:bold;text-align:center;">5%</th><th style="border:1px solid #000;font-weight:bold;text-align:center;">5%</th></tr>`;
 
-    const bodyHtml = rows
-      .map((r) => {
-        const vals = [
-          r.date,
-          r.month,
-          r.branchTradeName,
-          r.payor,
-          r.tin,
-          r.address,
-          r.address2 ?? '',
-          r.category,
-          r.privateOrGovt,
-          formatAccounting(r.nonVatExempt),
-          formatAccounting(r.grossOfVat),
-          formatAccounting(r.netOfVat),
-          formatAccounting(r.vat),
-          formatAccounting(r.total),
-          formatAccounting(r.wtGoods1),
-          formatAccounting(r.wtServices2),
-          formatAccounting(r.wtRental5),
-          formatAccounting(r.wtVat5),
-          formatAccounting(r.actual),
-          r.remarks,
-        ];
-        return `<tr>${vals
-          .map((v, i) => `<td style="border:1px solid #000;text-align:${i >= 9 && i <= 18 ? 'right' : 'left'};">${htmlEsc(v)}</td>`)
-          .join('')}</tr>`;
-      })
-      .join('');
-
-    html = `<table style="border-collapse:collapse;"><thead>${h1}${h2}${h3}</thead><tbody>${bodyHtml}</tbody></table>`;
-
-    const tsv1 = ['SALES', ...Array(13).fill(''), 'WITHHOLDING TAX', '', '', '', 'ACTUAL', 'REMARKS'].join('\t');
-    const tsv2 = [...cols, 'GOODS', 'SERVICES', 'RENTAL', 'VAT', '', ''].join('\t');
-    const tsv3 = [...Array(14).fill(''), '1%', '2%', '5%', '5%', '', ''].join('\t');
-    const tsvBody = rows.map((r) =>
+    const buildSalesRowCells = (r: LedgerRow) =>
       [
         r.date,
         r.month,
@@ -636,8 +692,23 @@ export async function copyFilingTableForGoogleSheets(
         formatAccounting(r.wtVat5),
         formatAccounting(r.actual),
         r.remarks,
-      ].join('\t')
-    );
+      ].map(safeSheetCell);
+
+    const bodyHtml = rows
+      .map((r) => {
+        const vals = buildSalesRowCells(r);
+        return `<tr>${vals
+          .map((v, i) => `<td style="border:1px solid #000;text-align:${i >= 9 && i <= 18 ? 'right' : 'left'};">${htmlEsc(v)}</td>`)
+          .join('')}</tr>`;
+      })
+      .join('');
+
+    html = `<table style="border-collapse:collapse;"><thead>${h1}${h2}${h3}</thead><tbody>${bodyHtml}</tbody></table>`;
+
+    const tsv1 = ['SALES', ...Array(13).fill(''), 'WITHHOLDING TAX', '', '', '', 'ACTUAL', 'REMARKS'].join('\t');
+    const tsv2 = [...cols, 'GOODS', 'SERVICES', 'RENTAL', 'VAT', '', ''].join('\t');
+    const tsv3 = [...Array(14).fill(''), '1%', '2%', '5%', '5%', '', ''].join('\t');
+    const tsvBody = rows.map((r) => buildSalesRowCells(r).join('\t'));
     tsv = [tsv1, tsv2, tsv3, ...tsvBody].join('\n');
   }
 

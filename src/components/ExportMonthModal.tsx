@@ -198,16 +198,16 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-xs">
       <div className="w-full max-w-2xl rounded-[24px] border-2 border-white bg-white shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-200/80 px-5 py-4">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#0B4DA2] text-white">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200/80 px-5 py-4">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#0B4DA2] text-white">
               <Calendar className="h-4 w-4" />
             </div>
-            <div>
-              <h2 className="font-display text-sm font-semibold text-slate-900">
+            <div className="min-w-0 flex-1">
+              <h2 className="font-display text-sm font-semibold leading-snug text-slate-900">
                 Choose Month to Export
               </h2>
-              <p className="text-[11px] text-slate-500">
+              <p className="text-[11px] leading-normal text-slate-500 break-words">
                 {clientName} · Select filing period, ledger, and export format
               </p>
             </div>
@@ -216,7 +216,7 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close export modal"
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 cursor-pointer"
+            className="inline-flex items-center justify-center rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 cursor-pointer shrink-0"
           >
             <X className="h-4 w-4" />
           </button>
@@ -225,16 +225,16 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
         {/* Body */}
         <div className="overflow-y-auto p-5 space-y-5">
           {/* Format & Ledger Row */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-12">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-12 items-end">
             <div className="sm:col-span-6">
-              <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1.5">
+              <label className="block text-[11px] font-semibold uppercase tracking-wide leading-normal text-slate-500 mb-1.5">
                 Export Format
               </label>
               <div className="grid grid-cols-3 rounded-xl border border-slate-200 bg-[#F4F8FD] p-0.5">
                 <button
                   type="button"
                   onClick={() => setFormat('XLSX')}
-                  className={`rounded-lg py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                  className={`inline-flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-semibold leading-normal whitespace-nowrap transition-colors cursor-pointer ${
                     format === 'XLSX'
                       ? 'bg-[#18181B] text-white'
                       : 'text-slate-600 hover:text-slate-900'
@@ -245,7 +245,7 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setFormat('CSV')}
-                  className={`rounded-lg py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                  className={`inline-flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-semibold leading-normal whitespace-nowrap transition-colors cursor-pointer ${
                     format === 'CSV'
                       ? 'bg-[#18181B] text-white'
                       : 'text-slate-600 hover:text-slate-900'
@@ -256,7 +256,7 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setFormat('COPY_SHEETS')}
-                  className={`rounded-lg py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                  className={`inline-flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-semibold leading-normal whitespace-nowrap transition-colors cursor-pointer ${
                     format === 'COPY_SHEETS'
                       ? 'bg-[#18181B] text-white'
                       : 'text-slate-600 hover:text-slate-900'
@@ -268,14 +268,14 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
             </div>
 
             <div className="sm:col-span-4">
-              <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1.5">
+              <label className="block text-[11px] font-semibold uppercase tracking-wide leading-normal text-slate-500 mb-1.5">
                 Ledger
               </label>
               <div className="grid grid-cols-2 rounded-xl border border-slate-200 bg-[#F4F8FD] p-0.5">
                 <button
                   type="button"
                   onClick={() => setExportMode('SALES')}
-                  className={`rounded-lg py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                  className={`inline-flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-semibold leading-normal whitespace-nowrap transition-colors cursor-pointer ${
                     exportMode === 'SALES'
                       ? 'bg-[#0B4DA2] text-white'
                       : 'text-slate-600 hover:text-slate-900'
@@ -286,7 +286,7 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setExportMode('PURCHASES')}
-                  className={`rounded-lg py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                  className={`inline-flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-semibold leading-normal whitespace-nowrap transition-colors cursor-pointer ${
                     exportMode === 'PURCHASES'
                       ? 'bg-[#0B4DA2] text-white'
                       : 'text-slate-600 hover:text-slate-900'
@@ -298,14 +298,14 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
             </div>
 
             <div className="sm:col-span-2">
-              <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1.5">
+              <label className="block text-[11px] font-semibold uppercase tracking-wide leading-normal text-slate-500 mb-1.5">
                 Year
               </label>
               <select
                 value={yearFilter}
                 onChange={(e) => setYearFilter(e.target.value)}
                 aria-label="Export year"
-                className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none"
+                className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold leading-normal tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none"
               >
                 {availableYears.map((y) => (
                   <option key={y} value={y}>
@@ -414,9 +414,9 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
                           : 'border-slate-200/80 bg-slate-50/50 text-slate-400 hover:bg-slate-50'
                       }`}
                     >
-                      <div className="flex w-full items-center justify-between gap-1">
+                      <div className="flex w-full items-center justify-between gap-1 min-w-0">
                         <span
-                          className={`text-xs font-bold ${
+                          className={`text-xs font-bold leading-normal truncate ${
                             isSelected
                               ? 'text-[#0B4DA2]'
                               : hasRows
@@ -427,12 +427,12 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
                           {m}
                         </span>
                         {isSelected && (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-[#0B4DA2] text-white">
+                          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#0B4DA2] text-white">
                             <Check className="h-2.5 w-2.5" />
                           </span>
                         )}
                       </div>
-                      <div className="mt-1 flex w-full items-baseline justify-between gap-1 text-[11px]">
+                      <div className="mt-1 flex flex-wrap w-full items-baseline justify-between gap-1 text-[11px] leading-normal">
                         <span
                           className={
                             hasRows ? 'font-semibold text-slate-700' : 'text-slate-400'
@@ -440,7 +440,7 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
                         >
                           {stats.count} {stats.count === 1 ? 'row' : 'rows'}
                         </span>
-                        <span className="tabular-nums-mono font-medium text-slate-600">
+                        <span className="tabular-nums-mono font-medium text-slate-600 break-all">
                           {stats.total > 0 ? `₱${formatAccounting(stats.total)}` : '-'}
                         </span>
                       </div>
@@ -451,9 +451,9 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
             </div>
 
             {/* Export Preview Summary */}
-            <div className="rounded-xl border border-slate-200 bg-[#F4F8FD] px-3.5 py-2.5 text-xs space-y-1">
+            <div className="rounded-xl border border-slate-200 bg-[#F4F8FD] px-3.5 py-2.5 text-xs leading-normal space-y-1">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold text-slate-900">
+                <span className="font-semibold text-slate-900 break-words">
                   {exportMode === 'SALES' ? 'SALES' : 'EXPENSES'} · {periodSummary.label}
                 </span>
                 <span className="tabular-nums-mono font-bold text-[#0B4DA2]">
@@ -462,7 +462,7 @@ export const ExportMonthModal: React.FC<ExportMonthModalProps> = ({
                 </span>
               </div>
               {previewFilename && (
-                <div className="text-[11px] text-slate-500 truncate tabular-nums-mono">
+                <div className="text-[11px] leading-normal text-slate-500 break-all tabular-nums-mono">
                   File: {previewFilename}
                 </div>
               )}

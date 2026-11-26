@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Calculator,
+  Calendar,
   ChevronDown,
   ListPlus,
   Plus,
@@ -22,6 +23,7 @@ import {
   FILING_MONTHS,
   calculateRowTaxes,
   deriveMonthFromDate,
+  extractYearFromDate,
   formatAccounting,
   formatDateSlash,
   formatPlainInput,
@@ -42,7 +44,10 @@ interface EntryComposerProps {
   modeLabel?: string;
   coveredMonth: string;
   coveredYear: string;
+  onChangeCoveredMonth?: (month: string) => void;
+  onChangeCoveredYear?: (year: string) => void;
   accountTitles: string[];
+  knownRows?: LedgerRow[];
   onUpdateAccountTitles: (titles: string[]) => void;
   autoCalcEnabled: boolean;
   onToggleAutoCalc: (val: boolean) => void;
@@ -73,6 +78,7 @@ function createDraftLine(
     key: `line-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     category,
     taxStatus,
+    rawNonVat: '',
     rawAmount: '',
     applyGovtVat5: privateOrGovt === 'GOVT',
     manualOverride: false,
@@ -98,7 +104,8 @@ function draftFromRow(row: LedgerRow): SplitLineDraft {
     key: row.id,
     category: row.category,
     taxStatus: isVatable ? 'VATABLE' : 'NON_VAT',
-    rawAmount: formatPlainInput(isVatable ? row.grossOfVat : row.nonVatExempt),
+    rawNonVat: formatPlainInput(row.nonVatExempt),
+    rawAmount: formatPlainInput(row.grossOfVat),
     applyGovtVat5: row.applyGovtVat5,
     manualOverride: row.manualOverride,
     particular: row.particular ?? '',
@@ -123,7 +130,10 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
   modeLabel,
   coveredMonth,
   coveredYear,
+  onChangeCoveredMonth,
+  onChangeCoveredYear,
   accountTitles,
+  knownRows = [],
   onUpdateAccountTitles,
   autoCalcEnabled,
   onToggleAutoCalc,
@@ -153,6 +163,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
 
   const [lines, setLines] = useState<SplitLineDraft[]>([createDraftLine('GOODS', 'PRIVATE', 'VATABLE')]);
   const [formError, setFormError] = useState<string>('');
+  const [tinAutofilled, setTinAutofilled] = useState<boolean>(false);
 
   const [openAccountDropdownKey, setOpenAccountDropdownKey] = useState<string | null>(null);
   const [showAccountListModal, setShowAccountListModal] = useState(false);
@@ -187,19 +198,26 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
     setShowAccountListModal(false);
     setLines([createDraftLine('GOODS', 'PRIVATE', 'VATABLE')]);
     setFormError('');
+    setTinAutofilled(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientKey]);
 
-  // Sync default filing date & month when active Month Cover changes (without wiping typed lines)
+  // Sync default filing date & month when active Month Cover changes (without wiping typed lines or valid matching dates)
   useEffect(() => {
     if (editingRow) return;
-    const nextDate = getDefaultDateForCover(coveredMonth, coveredYear);
-    setDate(nextDate);
-    setMonth(
-      coveredMonth !== 'ALL'
-        ? coveredMonth
-        : deriveMonthFromDate(nextDate) || 'JANUARY'
-    );
+    setDate((prevDate) => {
+      const prevMonth = deriveMonthFromDate(prevDate);
+      const prevYear = extractYearFromDate(prevDate);
+      const targetMonth = coveredMonth !== 'ALL' ? coveredMonth : prevMonth || 'JANUARY';
+      const monthMatches = prevMonth === targetMonth;
+      const yearMatches = coveredYear === 'ALL' || prevYear === coveredYear;
+      if (monthMatches && yearMatches) return prevDate;
+      return getDefaultDateForCover(coveredMonth, coveredYear);
+    });
+    setMonth((prevMonth) => {
+      if (coveredMonth !== 'ALL') return coveredMonth;
+      return prevMonth || deriveMonthFromDate(getDefaultDateForCover(coveredMonth, coveredYear)) || 'JANUARY';
+    });
   }, [coveredMonth, coveredYear, editingRow]);
 
   // Populate when editing an existing row
@@ -220,6 +238,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
       setWithholdingAgent(editingRow.withholdingAgent ?? 'YES');
       setLines([draftFromRow(editingRow)]);
       setFormError('');
+      setTinAutofilled(false);
     }
   }, [editingRow]);
 
@@ -265,18 +284,20 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
     whtAgent: YesNo = withholdingAgent
   ): SplitLineDraft => {
     if (!autoCalcEnabled || draft.manualOverride) return draft;
-    const amt = parseAmount(draft.rawAmount);
+    const nonVatAmt = parseAmount(draft.rawNonVat);
+    const grossAmt = parseAmount(draft.rawAmount);
     const calc = calculateRowTaxes({
       mode,
       category: draft.category,
       privateOrGovt: entityType,
-      taxStatus: draft.taxStatus,
-      amount: amt,
+      nonVatAmount: nonVatAmt,
+      grossAmount: grossAmt,
       applyGovtVat5: mode === 'SALES' && entityType === 'GOVT' ? draft.applyGovtVat5 : false,
       withholdingAgent: whtAgent,
     });
     return {
       ...draft,
+      taxStatus: grossAmt !== null ? 'VATABLE' : 'NON_VAT',
       nonVatExempt: calc.nonVatExempt,
       grossOfVat: calc.grossOfVat,
       netOfVat: calc.netOfVat,
@@ -289,8 +310,52 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
     };
   };
 
+  const findMatchingTinRow = (digits: string): LedgerRow | undefined => {
+    if (!isValidTinDigits(digits) || knownRows.length === 0) return undefined;
+    const candidates = knownRows.filter((r) => Boolean(r.payor?.trim()));
+    const sorted = [...candidates].sort((a, b) =>
+      (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || '')
+    );
+    const exact = sorted.find((r) => normalizeTinDigits(r.tin) === digits);
+    if (exact) return exact;
+    if (digits.length === 9) {
+      return sorted.find((r) => {
+        const rd = normalizeTinDigits(r.tin);
+        return rd.length === 12 && rd.endsWith('000') && rd.slice(0, 9) === digits;
+      });
+    }
+    return undefined;
+  };
+
   const handleTinChange = (rawVal: string) => {
-    setTin(formatTin(rawVal));
+    const formatted = formatTin(rawVal);
+    setTin(formatted);
+    const digits = normalizeTinDigits(formatted);
+    if (editingRow || !isValidTinDigits(digits)) {
+      setTinAutofilled(false);
+      return;
+    }
+    const matched = findMatchingTinRow(digits);
+    if (!matched) {
+      setTinAutofilled(false);
+      return;
+    }
+    setPayor(matched.payor || '');
+    setBranchTradeName(matched.branchTradeName || '');
+    setAddress(matched.address || '');
+    setAddress2(matched.address2 || '');
+    if (mode === 'SALES' && matched.privateOrGovt) {
+      handleEntityTypeChange(matched.privateOrGovt);
+    }
+    if (mode === 'PURCHASES') {
+      if (matched.payeeClassification) {
+        setPayeeClassification(matched.payeeClassification);
+      }
+      if (matched.withholdingAgent) {
+        handleWithholdingAgentChange(matched.withholdingAgent);
+      }
+    }
+    setTinAutofilled(true);
   };
 
   const updateLine = (key: string, patch: Partial<SplitLineDraft>, forceRecalc = false) => {
@@ -381,6 +446,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
     setReferenceNo('');
     setLines([createDraftLine('GOODS', 'PRIVATE', 'VATABLE')]);
     setFormError('');
+    setTinAutofilled(false);
     tinInputRef.current?.focus();
   };
 
@@ -399,6 +465,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
 
     const validLines = lines.filter(
       (ln) =>
+        parseAmount(ln.rawNonVat) !== null ||
         parseAmount(ln.rawAmount) !== null ||
         (ln.total ?? 0) > 0 ||
         parseAmount(ln.rawActual) !== null
@@ -477,17 +544,17 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
     <section className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
       {/* Header Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/70 px-5 py-3.5">
-        <div className="flex flex-wrap items-center gap-3">
-          <h2 className="font-display text-sm font-semibold text-slate-900">
+        <div className="flex flex-wrap items-center gap-3 min-w-0">
+          <h2 className="font-display text-sm font-semibold leading-snug text-slate-900">
             {editingRow ? `Edit ${displayModeLabel} Entry` : `Encode ${displayModeLabel} Transaction`}
           </h2>
-          <span className="rounded-lg bg-[#E7F0FC] px-2.5 py-0.5 text-[11px] font-semibold text-[#0B4DA2]">
+          <span className="inline-flex items-center rounded-lg bg-[#E7F0FC] px-2.5 py-0.5 text-[11px] font-semibold leading-normal text-[#0B4DA2] whitespace-nowrap">
             Cover: {coveredMonth === 'ALL' ? (coveredYear === 'ALL' ? 'ALL MONTHS' : `ALL MONTHS ${coveredYear}`) : coveredYear === 'ALL' ? coveredMonth : `${coveredMonth} ${coveredYear}`}
           </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-4">
-          <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer select-none">
+          <label className="inline-flex items-center gap-2 text-xs font-medium leading-normal text-slate-700 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={autoCalcEnabled}
@@ -511,10 +578,10 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
             <button
               type="button"
               onClick={onCancelEdit}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium leading-normal text-slate-700 hover:bg-slate-50 whitespace-nowrap cursor-pointer"
             >
-              <X className="h-3.5 w-3.5" />
-              Cancel Edit
+              <X className="h-3.5 w-3.5 shrink-0" />
+              <span>Cancel Edit</span>
             </button>
           )}
         </div>
@@ -522,13 +589,13 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
 
       <form onSubmit={handleSubmit} autoComplete="off" className="p-5 space-y-5">
         {/* Shared Transaction Header */}
-        <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-12">
+        <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-12 items-end">
           {/* Date */}
           <div className="lg:col-span-2">
-            <label className="block text-xs font-medium text-slate-600 mb-1">
+            <label className="block text-xs font-medium leading-normal text-slate-600 mb-1">
               DATE <span className="text-red-600">*</span>
             </label>
-            <div className="flex gap-1">
+            <div className="flex items-stretch gap-1">
               <input
                 type="text"
                 autoComplete="off"
@@ -537,41 +604,66 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                   const val = e.target.value;
                   setDate(val);
                   const derived = deriveMonthFromDate(val);
-                  if (derived) setMonth(derived);
+                  if (derived) {
+                    setMonth(derived);
+                    if (!editingRow) onChangeCoveredMonth?.(derived);
+                  }
+                  const derivedYear = extractYearFromDate(val);
+                  if (!editingRow && derivedYear && /^\d{4}$/.test(derivedYear)) {
+                    onChangeCoveredYear?.(derivedYear);
+                  }
                 }}
-                className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+                className="w-full min-w-0 rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm leading-normal tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
               />
-              <input
-                type="date"
-                value={toIsoDateInput(date)}
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  const slash = formatDateSlash(e.target.value);
-                  setDate(slash);
-                  const derived = deriveMonthFromDate(e.target.value);
-                  if (derived) setMonth(derived);
-                }}
-                aria-label="Pick date"
-                className="w-9 shrink-0 rounded-lg border border-slate-300 bg-slate-50 px-1.5 text-xs text-slate-700 focus:border-blue-600 focus:outline-none"
-              />
+              <div className="relative flex w-9 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus-within:border-blue-600 focus-within:ring-2 focus-within:ring-blue-600/15 transition-colors">
+                <Calendar className="h-4 w-4 pointer-events-none" />
+                <input
+                  type="date"
+                  value={toIsoDateInput(date)}
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    const slash = formatDateSlash(e.target.value);
+                    setDate(slash);
+                    const derived = deriveMonthFromDate(e.target.value);
+                    if (derived) {
+                      setMonth(derived);
+                      if (!editingRow) onChangeCoveredMonth?.(derived);
+                    }
+                    const derivedYear = extractYearFromDate(e.target.value);
+                    if (!editingRow && derivedYear && /^\d{4}$/.test(derivedYear)) {
+                      onChangeCoveredYear?.(derivedYear);
+                    }
+                  }}
+                  onClick={(e) => {
+                    try {
+                      e.currentTarget.showPicker?.();
+                    } catch {
+                      // fallback to native input click
+                    }
+                  }}
+                  aria-label="Pick date"
+                  title="Pick date"
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                />
+              </div>
             </div>
           </div>
 
           {/* Month */}
           <div className="lg:col-span-2">
-            <div className="flex items-center justify-between gap-1 mb-1">
-              <label className="block text-xs font-medium text-slate-600">MONTH</label>
-              {coveredMonth !== 'ALL' && month && month !== coveredMonth && (
-                <span className="text-[10px] font-semibold text-amber-700">
-                  Outside cover
-                </span>
-              )}
-            </div>
+            <label className="block text-xs font-medium leading-normal text-slate-600 mb-1">MONTH</label>
             <select
               value={month}
-              onChange={(e) => setMonth(e.target.value.toUpperCase())}
+              onChange={(e) => {
+                const nextMonth = e.target.value.toUpperCase();
+                setMonth(nextMonth);
+                if (!editingRow) {
+                  setDate(getDefaultDateForCover(nextMonth, coveredYear));
+                  onChangeCoveredMonth?.(nextMonth);
+                }
+              }}
               aria-label="Filing month"
-              className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm font-medium text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+              className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm font-medium leading-normal text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
             >
               {!FILING_MONTHS.includes(month as (typeof FILING_MONTHS)[number]) && month && (
                 <option value={month}>{month}</option>
@@ -586,15 +678,19 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
 
           {/* TIN */}
           <div className="lg:col-span-3">
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-medium text-slate-600">
+            <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
+              <label className="block text-xs font-medium leading-normal text-slate-600">
                 TIN
               </label>
-              {tinDigits.length > 0 && !isValidTinDigits(tinDigits) && (
-                <span className="text-[11px] font-medium text-amber-700">
+              {tinDigits.length > 0 && !isValidTinDigits(tinDigits) ? (
+                <span className="text-[11px] font-medium leading-normal text-amber-700">
                   {tinDigits.length}/9 or 12 digits
                 </span>
-              )}
+              ) : tinAutofilled ? (
+                <span className="text-[11px] font-medium leading-normal text-[#0B4DA2]">
+                  Autofilled
+                </span>
+              ) : null}
             </div>
             <div>
               <input
@@ -603,14 +699,14 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                 autoComplete="off"
                 value={tin}
                 onChange={(e) => handleTinChange(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-normal tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
               />
             </div>
           </div>
 
           {/* PAYOR / PAYEE/SUPPLIER */}
           <div className="lg:col-span-3">
-            <label className="block text-xs font-medium text-slate-600 mb-1">
+            <label className="block text-xs font-medium leading-normal text-slate-600 mb-1">
               {entityLabel} <span className="text-red-600">*</span>
             </label>
             <input
@@ -618,14 +714,14 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
               autoComplete="off"
               value={payor}
               onChange={(e) => setPayor(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-normal text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
             />
           </div>
 
           {/* Mode-specific Header Toggle: PRIVATE OR GOVT (Sales) OR CLASSIFICATION (Purchases) */}
           {mode === 'SALES' ? (
             <div className="lg:col-span-2">
-              <label className="block text-xs font-medium text-slate-600 mb-1">
+              <label className="block text-xs font-medium leading-normal text-slate-600 mb-1">
                 PRIVATE OR GOVT
               </label>
               <div className="grid grid-cols-2 rounded-lg border border-slate-300 bg-slate-50 p-0.5">
@@ -634,7 +730,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                     key={type}
                     type="button"
                     onClick={() => handleEntityTypeChange(type)}
-                    className={`rounded-md py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                    className={`inline-flex items-center justify-center rounded-md py-1.5 text-xs font-semibold leading-normal transition-colors cursor-pointer ${
                       privateOrGovt === type
                         ? type === 'GOVT'
                           ? 'bg-slate-900 text-white'
@@ -649,13 +745,13 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
             </div>
           ) : (
             <div className="lg:col-span-2">
-              <label className="block text-xs font-medium text-slate-600 mb-1 truncate" title="CLASSIFICATION OF PAYEE/SUPPLIER (N/A, INDIVIDUAL OR CORP)">
+              <label className="block text-xs font-medium leading-normal text-slate-600 mb-1" title="CLASSIFICATION OF PAYEE/SUPPLIER (N/A, INDIVIDUAL OR CORP)">
                 CLASSIFICATION
               </label>
               <select
                 value={payeeClassification}
                 onChange={(e) => setPayeeClassification(e.target.value as PayeeClassification)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs font-semibold text-slate-900 focus:border-blue-600 focus:outline-none"
+                className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs font-semibold leading-normal text-slate-900 focus:border-blue-600 focus:outline-none"
               >
                 <option value="N/A">N/A</option>
                 <option value="INDIVIDUAL">INDIVIDUAL</option>
@@ -665,8 +761,8 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
           )}
 
           {/* BRANCH / TRADE NAME */}
-          <div className={mode === 'PURCHASES' ? 'sm:col-span-1 lg:col-span-3' : 'sm:col-span-1 lg:col-span-4'}>
-            <label className="block text-xs font-medium text-slate-600 mb-1">
+          <div className="sm:col-span-1 lg:col-span-4">
+            <label className="block text-xs font-medium leading-normal text-slate-600 mb-1">
               BRANCH/ TRADE NAME
             </label>
             <input
@@ -674,13 +770,13 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
               autoComplete="off"
               value={branchTradeName}
               onChange={(e) => setBranchTradeName(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-normal text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
             />
           </div>
 
           {/* ADDRESS 1: BARANGAY / MUNICIPALITY */}
-          <div className={mode === 'PURCHASES' ? 'sm:col-span-1 lg:col-span-3' : 'sm:col-span-1 lg:col-span-4'}>
-            <label className="block text-xs font-medium text-slate-600 mb-1 truncate">
+          <div className="sm:col-span-1 lg:col-span-4">
+            <label className="block text-xs font-medium leading-normal text-slate-600 mb-1">
               ADDRESS 1 (BARANGAY / MUNICIPALITY)
             </label>
             <input
@@ -688,13 +784,13 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
               autoComplete="off"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-normal text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
             />
           </div>
 
           {/* ADDRESS 2: CITY / DISTRICT */}
-          <div className={mode === 'PURCHASES' ? 'sm:col-span-1 lg:col-span-2' : 'sm:col-span-1 lg:col-span-4'}>
-            <label className="block text-xs font-medium text-slate-600 mb-1 truncate">
+          <div className="sm:col-span-1 lg:col-span-4">
+            <label className="block text-xs font-medium leading-normal text-slate-600 mb-1">
               ADDRESS 2 (CITY / DISTRICT)
             </label>
             <input
@@ -702,15 +798,15 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
               autoComplete="off"
               value={address2}
               onChange={(e) => setAddress2(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-normal text-slate-900 uppercase focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
             />
           </div>
 
           {/* PURCHASES-only: SUPPORTING DOCS, REFERENCE NO., WITHHOLDING AGENT */}
           {mode === 'PURCHASES' && (
             <>
-              <div className="lg:col-span-2">
-                <label className="block text-xs font-medium text-slate-600 mb-1">
+              <div className="sm:col-span-1 lg:col-span-4">
+                <label className="block text-xs font-medium leading-normal text-slate-600 mb-1">
                   SUPPORTING DOCS
                 </label>
                 <input
@@ -718,12 +814,12 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                   autoComplete="off"
                   value={supportingDocs}
                   onChange={(e) => setSupportingDocs(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-normal text-slate-900 uppercase focus:border-blue-600 focus:outline-none"
                 />
               </div>
 
-              <div className="lg:col-span-1">
-                <label className="block text-xs font-medium text-slate-600 mb-1 truncate">
+              <div className="sm:col-span-1 lg:col-span-4">
+                <label className="block text-xs font-medium leading-normal text-slate-600 mb-1">
                   REFERENCE NO.
                 </label>
                 <input
@@ -731,13 +827,13 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                   autoComplete="off"
                   value={referenceNo}
                   onChange={(e) => setReferenceNo(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-normal tabular-nums-mono text-slate-900 focus:border-blue-600 focus:outline-none"
                 />
               </div>
 
-              <div className="lg:col-span-1">
-                <label className="block text-xs font-medium text-slate-600 mb-1 truncate" title="WITHHOLDING AGENT (YES OR NO)">
-                  WHT AGENT
+              <div className="sm:col-span-1 lg:col-span-4">
+                <label className="block text-xs font-medium leading-normal text-slate-600 mb-1" title="WITHHOLDING AGENT (YES OR NO)">
+                  WITHHOLDING AGENT
                 </label>
                 <div className="grid grid-cols-2 rounded-lg border border-slate-300 bg-slate-50 p-0.5">
                   {(['YES', 'NO'] as const).map((yn) => (
@@ -745,7 +841,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                       key={yn}
                       type="button"
                       onClick={() => handleWithholdingAgentChange(yn)}
-                      className={`rounded-md py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                      className={`inline-flex items-center justify-center rounded-md py-1.5 text-xs font-semibold leading-normal transition-colors cursor-pointer ${
                         withholdingAgent === yn
                           ? yn === 'YES'
                             ? 'bg-blue-700 text-white'
@@ -815,13 +911,13 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                       )}
 
                       {/* Category Selector */}
-                      <div className="inline-flex rounded-md border border-slate-300 bg-white p-0.5">
+                      <div className="inline-flex flex-wrap max-w-full rounded-md border border-slate-300 bg-white p-0.5">
                         {categoryOptions.map((cat) => (
                           <button
                             key={cat}
                             type="button"
                             onClick={() => updateLine(ln.key, { category: cat }, true)}
-                            className={`rounded px-2.5 py-1 text-xs font-semibold transition-colors cursor-pointer ${
+                            className={`inline-flex items-center justify-center rounded px-2.5 py-1 text-xs font-semibold leading-normal whitespace-nowrap transition-colors cursor-pointer ${
                               ln.category === cat
                                 ? 'bg-blue-600 text-white'
                                 : 'text-slate-600 hover:text-slate-900'
@@ -830,32 +926,6 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                             {cat}
                           </button>
                         ))}
-                      </div>
-
-                      {/* Tax Status Selector */}
-                      <div className="inline-flex rounded-md border border-slate-300 bg-white p-0.5">
-                        <button
-                          type="button"
-                          onClick={() => updateLine(ln.key, { taxStatus: 'VATABLE' }, true)}
-                          className={`rounded px-2.5 py-1 text-xs font-semibold transition-colors cursor-pointer ${
-                            ln.taxStatus === 'VATABLE'
-                              ? 'bg-slate-900 text-white'
-                              : 'text-slate-600 hover:text-slate-900'
-                          }`}
-                        >
-                          VATable (12%)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => updateLine(ln.key, { taxStatus: 'NON_VAT' }, true)}
-                          className={`rounded px-2.5 py-1 text-xs font-semibold transition-colors cursor-pointer ${
-                            ln.taxStatus === 'NON_VAT'
-                              ? 'bg-slate-900 text-white'
-                              : 'text-slate-600 hover:text-slate-900'
-                          }`}
-                        >
-                          Non-VAT / Exempt
-                        </button>
                       </div>
 
                       {mode === 'SALES' && privateOrGovt === 'GOVT' && (
@@ -925,8 +995,8 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                         />
                       </div>
                       <div className="relative" ref={openAccountDropdownKey === ln.key ? accountDropdownRef : undefined}>
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <label className="block text-[11px] font-semibold text-amber-900">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                          <label className="block text-[11px] font-semibold leading-normal text-amber-900">
                             ACCOUNT TITLE
                           </label>
                           <div className="flex items-center gap-2">
@@ -935,11 +1005,11 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => addAccountTitleToList(ln.accountTitle)}
-                                  className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 cursor-pointer"
+                                  className="inline-flex items-center gap-0.5 text-[11px] font-semibold leading-normal text-emerald-700 hover:text-emerald-900 whitespace-nowrap cursor-pointer"
                                   title="Save this Account Title to your list"
                                 >
-                                  <Plus className="h-3 w-3" />
-                                  Save
+                                  <Plus className="h-3 w-3 shrink-0" />
+                                  <span>Save</span>
                                 </button>
                               )}
                             <button
@@ -949,11 +1019,11 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                                 setAccountListTargetKey(ln.key);
                                 setShowAccountListModal(true);
                               }}
-                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:text-blue-900 cursor-pointer"
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold leading-normal text-blue-700 hover:text-blue-900 whitespace-nowrap cursor-pointer"
                               title="Put or edit your list of Account Titles"
                             >
-                              <ListPlus className="h-3 w-3" />
-                              Manage List ({accountTitles.length})
+                              <ListPlus className="h-3 w-3 shrink-0" />
+                              <span>Manage List ({accountTitles.length})</span>
                             </button>
                           </div>
                         </div>
@@ -967,7 +1037,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                               setOpenAccountDropdownKey(ln.key);
                             }}
                             placeholder="SELECT OR TYPE ACCOUNT TITLE"
-                            className="w-full rounded-lg border border-amber-300 bg-amber-50/40 pl-3 pr-8 py-1.5 text-xs text-slate-900 uppercase focus:border-blue-600 focus:bg-white focus:outline-none"
+                            className="w-full rounded-lg border border-amber-300 bg-amber-50/40 pl-3 pr-8 py-1.5 text-xs leading-normal text-slate-900 uppercase focus:border-blue-600 focus:bg-white focus:outline-none"
                           />
                           <button
                             type="button"
@@ -976,7 +1046,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                               setOpenAccountDropdownKey((prev) => (prev === ln.key ? null : ln.key))
                             }
                             aria-label="Toggle account title list"
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-900 cursor-pointer"
+                            className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center text-slate-500 hover:text-slate-900 cursor-pointer"
                           >
                             <ChevronDown className="h-3.5 w-3.5" />
                           </button>
@@ -992,7 +1062,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                               return (
                                 <>
                                   {matches.length === 0 ? (
-                                    <div className="px-3 py-2 text-[11px] text-slate-500">
+                                    <div className="px-3 py-2 text-[11px] leading-normal text-slate-500">
                                       No matching account title in list.
                                     </div>
                                   ) : (
@@ -1004,13 +1074,13 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                                           updateLine(ln.key, { accountTitle: title });
                                           setOpenAccountDropdownKey(null);
                                         }}
-                                        className={`flex w-full items-center justify-between border-b border-slate-100 px-3 py-1.5 text-left text-xs last:border-b-0 hover:bg-amber-50 cursor-pointer ${
+                                        className={`flex w-full items-center justify-between border-b border-slate-100 px-3 py-1.5 text-left text-xs leading-normal last:border-b-0 hover:bg-amber-50 cursor-pointer ${
                                           ln.accountTitle.trim().toUpperCase() === title
                                             ? 'bg-amber-50/70 font-semibold text-slate-900'
                                             : 'text-slate-800'
                                         }`}
                                       >
-                                        <span className="truncate">{title}</span>
+                                        <span className="truncate leading-normal">{title}</span>
                                       </button>
                                     ))
                                   )}
@@ -1022,10 +1092,10 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                                         updateLine(ln.key, { accountTitle: q });
                                         setOpenAccountDropdownKey(null);
                                       }}
-                                      className="flex w-full items-center gap-1.5 border-t border-slate-200 bg-blue-50/70 px-3 py-2 text-left text-xs font-semibold text-blue-700 hover:bg-blue-100 cursor-pointer"
+                                      className="flex w-full items-center gap-1.5 border-t border-slate-200 bg-blue-50/70 px-3 py-2 text-left text-xs font-semibold leading-normal text-blue-700 hover:bg-blue-100 cursor-pointer"
                                     >
-                                      <Plus className="h-3.5 w-3.5" />
-                                      Add &quot;{q}&quot; to Account Title list
+                                      <Plus className="h-3.5 w-3.5 shrink-0" />
+                                      <span className="min-w-0 break-words">Add &quot;{q}&quot; to Account Title list</span>
                                     </button>
                                   )}
                                 </>
@@ -1038,30 +1108,51 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                   )}
 
                   {/* Numeric Fields Grid */}
-                  <div
-                    className={`grid grid-cols-2 gap-3 sm:grid-cols-4 ${
-                      mode === 'SALES' ? 'lg:grid-cols-9' : 'lg:grid-cols-7'
-                    }`}
-                  >
-                    <div className="col-span-2">
-                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                        {ln.taxStatus === 'VATABLE' ? 'GROSS OF VAT' : 'NON-VAT / VAT EXEMPT'}
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-12 items-end">
+                    <div className="col-span-2 sm:col-span-2 lg:col-span-2">
+                      <label className="block text-[11px] font-medium leading-normal text-slate-600 mb-1">
+                        NON-VAT / VAT EXEMPT
                       </label>
                       <input
                         ref={idx === 0 ? amountInputRef : undefined}
                         type="number"
                         step="0.01"
                         min="0"
-                        value={ln.rawAmount}
-                        onChange={(e) => updateLine(ln.key, { rawAmount: e.target.value })}
+                        value={ln.rawNonVat}
+                        onChange={(e) =>
+                          updateLine(ln.key, {
+                            rawNonVat: e.target.value,
+                            nonVatExempt: parseAmount(e.target.value),
+                          })
+                        }
                         placeholder="0.00"
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-right text-sm tabular-nums-mono font-semibold text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-right text-sm leading-normal tabular-nums-mono font-semibold text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+                      />
+                    </div>
+
+                    <div className="col-span-2 sm:col-span-2 lg:col-span-2">
+                      <label className="block text-[11px] font-medium leading-normal text-slate-600 mb-1">
+                        GROSS AMOUNT
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={ln.rawAmount}
+                        onChange={(e) =>
+                          updateLine(ln.key, {
+                            rawAmount: e.target.value,
+                            grossOfVat: parseAmount(e.target.value),
+                          })
+                        }
+                        placeholder="0.00"
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-right text-sm leading-normal tabular-nums-mono font-semibold text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
                       />
                     </div>
 
                     {/* NET OF VAT */}
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                    <div className={mode === 'PURCHASES' ? 'lg:col-span-2' : 'lg:col-span-1'}>
+                      <label className="block text-[11px] font-medium leading-normal text-slate-500 mb-1">
                         NET OF VAT
                       </label>
                       {ln.manualOverride || !autoCalcEnabled ? (
@@ -1071,18 +1162,18 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                           value={formatPlainInput(ln.netOfVat)}
                           onChange={(e) => updateLine(ln.key, { netOfVat: parseAmount(e.target.value) })}
                           placeholder="-"
-                          className="w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs tabular-nums-mono"
+                          className="min-h-[34px] w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs leading-normal tabular-nums-mono"
                         />
                       ) : (
-                        <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-xs tabular-nums-mono text-slate-700">
+                        <div className="min-h-[34px] flex items-center justify-end rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-xs leading-normal tabular-nums-mono text-slate-700">
                           {formatAccounting(ln.netOfVat)}
                         </div>
                       )}
                     </div>
 
                     {/* VAT */}
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                    <div className="lg:col-span-1">
+                      <label className="block text-[11px] font-medium leading-normal text-slate-500 mb-1">
                         VAT (12%)
                       </label>
                       {ln.manualOverride || !autoCalcEnabled ? (
@@ -1092,18 +1183,18 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                           value={formatPlainInput(ln.vat)}
                           onChange={(e) => updateLine(ln.key, { vat: parseAmount(e.target.value) })}
                           placeholder="-"
-                          className="w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs tabular-nums-mono"
+                          className="min-h-[34px] w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs leading-normal tabular-nums-mono"
                         />
                       ) : (
-                        <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-xs tabular-nums-mono text-slate-700">
+                        <div className="min-h-[34px] flex items-center justify-end rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-xs leading-normal tabular-nums-mono text-slate-700">
                           {formatAccounting(ln.vat)}
                         </div>
                       )}
                     </div>
 
                     {/* TOTAL */}
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                    <div className="lg:col-span-2">
+                      <label className="block text-[11px] font-medium leading-normal text-slate-500 mb-1">
                         TOTAL
                       </label>
                       {ln.manualOverride || !autoCalcEnabled ? (
@@ -1113,18 +1204,18 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                           value={formatPlainInput(ln.total)}
                           onChange={(e) => updateLine(ln.key, { total: parseAmount(e.target.value) })}
                           placeholder="-"
-                          className="w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs tabular-nums-mono font-semibold"
+                          className="min-h-[34px] w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs leading-normal tabular-nums-mono font-semibold"
                         />
                       ) : (
-                        <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-xs tabular-nums-mono font-semibold text-slate-900">
+                        <div className="min-h-[34px] flex items-center justify-end rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-xs leading-normal tabular-nums-mono font-semibold text-slate-900">
                           {formatAccounting(ln.total)}
                         </div>
                       )}
                     </div>
 
                     {/* EWT (1% / 2% / 5%) */}
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                    <div className="lg:col-span-1">
+                      <label className="block text-[11px] font-medium leading-normal text-slate-500 mb-1">
                         EWT ({activeEwtRateLabel})
                       </label>
                       {ln.manualOverride || !autoCalcEnabled ? (
@@ -1147,10 +1238,10 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                             else if (ln.category === 'RENTAL') updateLine(ln.key, { wtRental5: val });
                           }}
                           placeholder="-"
-                          className="w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs tabular-nums-mono"
+                          className="min-h-[34px] w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs leading-normal tabular-nums-mono"
                         />
                       ) : (
-                        <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-xs tabular-nums-mono text-slate-700">
+                        <div className="min-h-[34px] flex items-center justify-end rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-xs leading-normal tabular-nums-mono text-slate-700">
                           {formatAccounting(
                             ln.category === 'GOODS'
                               ? ln.wtGoods1
@@ -1166,11 +1257,11 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
 
                     {/* NET PAYABLE READOUT IN PURCHASES */}
                     {mode === 'PURCHASES' && (
-                      <div>
-                        <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                      <div className="lg:col-span-2">
+                        <label className="block text-[11px] font-medium leading-normal text-slate-500 mb-1">
                           NET PAYABLE
                         </label>
-                        <div className="rounded-lg border border-slate-200 bg-slate-100 px-2.5 py-1.5 text-right text-xs tabular-nums-mono font-semibold text-slate-900">
+                        <div className="min-h-[34px] flex items-center justify-end rounded-lg border border-slate-200 bg-slate-100 px-2.5 py-1.5 text-right text-xs leading-normal tabular-nums-mono font-semibold text-slate-900">
                           {formatAccounting(expectedActual)}
                         </div>
                       </div>
@@ -1180,7 +1271,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                     {mode === 'SALES' && (
                       <>
                         <div>
-                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                          <label className="block text-[11px] font-medium leading-normal text-slate-500 mb-1">
                             WHT VAT (5%)
                           </label>
                           {ln.manualOverride || !autoCalcEnabled ? (
@@ -1190,29 +1281,29 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                               value={formatPlainInput(ln.wtVat5)}
                               onChange={(e) => updateLine(ln.key, { wtVat5: parseAmount(e.target.value) })}
                               placeholder="-"
-                              className="w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs tabular-nums-mono"
+                              className="min-h-[34px] w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-xs leading-normal tabular-nums-mono"
                             />
                           ) : (
-                            <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-xs tabular-nums-mono text-slate-700">
+                            <div className="min-h-[34px] flex items-center justify-end rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-xs leading-normal tabular-nums-mono text-slate-700">
                               {formatAccounting(ln.wtVat5)}
                             </div>
                           )}
                         </div>
 
                         <div className="col-span-2">
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="block text-[11px] font-medium text-slate-600">
+                          <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
+                            <label className="block text-[11px] font-medium leading-normal text-slate-600">
                               ACTUAL
                             </label>
                             <button
                               type="button"
                               onClick={() => handleComputeExpectedActual(ln.key)}
                               disabled={expectedActual === null}
-                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:text-blue-900 disabled:text-slate-400 cursor-pointer"
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold leading-normal text-blue-700 hover:text-blue-900 disabled:text-slate-400 whitespace-nowrap cursor-pointer"
                               title="Set ACTUAL = TOTAL - Total Withholding Taxes"
                             >
-                              <Calculator className="h-3 w-3" />
-                              Compute Expected ({formatAccounting(expectedActual)})
+                              <Calculator className="h-3 w-3 shrink-0" />
+                              <span>Compute Expected ({formatAccounting(expectedActual)})</span>
                             </button>
                           </div>
                           <input
@@ -1221,7 +1312,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                             value={ln.rawActual}
                             onChange={(e) => updateLine(ln.key, { rawActual: e.target.value })}
                             placeholder="Leave blank if uncollected"
-                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-right text-xs tabular-nums-mono font-semibold text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-right text-xs leading-normal tabular-nums-mono font-semibold text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
                           />
                         </div>
                       </>
@@ -1236,7 +1327,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                         value={ln.remarks}
                         onChange={(e) => updateLine(ln.key, { remarks: e.target.value })}
                         placeholder="Remarks (e.g., SI # / OR # / 2307 reference)"
-                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 focus:border-blue-600 focus:outline-none"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs leading-normal text-slate-800 focus:border-blue-600 focus:outline-none"
                       />
                     </div>
                   )}
@@ -1247,35 +1338,37 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
         </div>
 
         {formError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-medium text-red-700">
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-medium leading-normal text-red-700">
             {formError}
           </div>
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-          <div className="text-xs text-slate-500">
+          <div className="text-xs leading-normal text-slate-500">
             Press <kbd className="rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-700">Enter</kbd> to save quickly · Zero values export as <code className="font-mono">-</code>
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
             {!editingRow && (
               <button
                 type="button"
                 onClick={resetFormAfterSave}
-                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
+                className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-medium leading-normal text-slate-700 hover:bg-slate-50 whitespace-nowrap cursor-pointer"
               >
                 Clear Fields
               </button>
             )}
             <button
               type="submit"
-              className="inline-flex items-center gap-2 rounded-xl bg-[#18181B] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#18181B] px-4 py-2 text-xs font-semibold leading-normal text-white transition-colors hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <Sparkles className="h-3.5 w-3.5" />
-              {editingRow
-                ? 'Save Changes'
-                : entryType === 'SPLIT'
-                ? `Add ${lines.length} Split Rows to ${displayModeLabel}`
-                : `Add to ${displayModeLabel} Ledger`}
+              <Sparkles className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                {editingRow
+                  ? 'Save Changes'
+                  : entryType === 'SPLIT'
+                  ? `Add ${lines.length} Split Rows to ${displayModeLabel}`
+                  : `Add to ${displayModeLabel} Ledger`}
+              </span>
             </button>
           </div>
         </div>
@@ -1285,12 +1378,12 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
       {showAccountListModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
           <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-xl overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
-              <div>
-                <h3 className="font-display text-sm font-semibold text-slate-900">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-3.5">
+              <div className="min-w-0 flex-1">
+                <h3 className="font-display text-sm font-semibold leading-snug text-slate-900">
                   Account Title List ({accountTitles.length})
                 </h3>
-                <p className="text-[11px] text-slate-500 mt-0.5">
+                <p className="text-[11px] leading-normal text-slate-500 mt-0.5 break-words">
                   Put or paste your chart of account titles below (saved offline on this device)
                 </p>
               </div>
@@ -1426,7 +1519,7 @@ export const EntryComposer: React.FC<EntryComposerProps> = ({
                             if (targetKey) updateLine(targetKey, { accountTitle: title });
                             setShowAccountListModal(false);
                           }}
-                          className="text-left flex-1 truncate font-medium hover:text-blue-700 cursor-pointer"
+                          className="text-left flex-1 min-w-0 truncate leading-normal font-medium hover:text-blue-700 cursor-pointer"
                           title="Use this Account Title"
                         >
                           {title}

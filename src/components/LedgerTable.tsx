@@ -161,8 +161,8 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
     <section className="rounded-2xl border border-white/90 bg-white/80 backdrop-blur-xl overflow-hidden shadow-[0_8px_28px_-12px_rgba(11,77,162,0.1)]">
       {/* Filter Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/70 px-5 py-3.5">
-        <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-[240px]">
-          <div className="relative flex-1 min-w-[200px] max-w-xs">
+        <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-0 w-full sm:w-auto">
+          <div className="relative flex-1 min-w-0 w-full sm:w-auto sm:min-w-[200px] sm:max-w-xs">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
@@ -173,7 +173,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                   ? 'Search payee, TIN, ref no., particular, account...'
                   : 'Search payor, TIN, branch, remarks...'
               }
-              className="w-full rounded-lg border border-slate-300 bg-white pl-8 pr-3 py-1.5 text-xs text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+              className="w-full rounded-lg border border-slate-300 bg-white pl-8 pr-3 py-1.5 text-xs leading-normal text-slate-900 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
             />
           </div>
 
@@ -182,7 +182,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
               value={monthFilter}
               onChange={(e) => setMonthFilter(e.target.value)}
               aria-label="Filter by month"
-              className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 focus:border-blue-600 focus:outline-none"
+              className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium leading-normal text-slate-700 focus:border-blue-600 focus:outline-none"
             >
               <option value="ALL">All Months</option>
               {availableMonths.map((m) => (
@@ -193,13 +193,13 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
             </select>
           )}
 
-          <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
+          <div className="inline-flex flex-wrap max-w-full rounded-lg bg-slate-100 p-0.5">
             {categoryFilterOptions.map((cat) => (
               <button
                 key={cat}
                 type="button"
                 onClick={() => setCategoryFilter(cat)}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`inline-flex items-center justify-center rounded-md px-2.5 py-1 text-xs font-medium leading-normal transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   categoryFilter === cat
                     ? 'bg-white text-slate-900 shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -211,13 +211,13 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
           </div>
 
           {mode === 'SALES' ? (
-            <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
+            <div className="inline-flex flex-wrap max-w-full rounded-lg bg-slate-100 p-0.5">
               {(['ALL', 'PRIVATE', 'GOVT'] as const).map((ent) => (
                 <button
                   key={ent}
                   type="button"
                   onClick={() => setEntityFilter(ent)}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`inline-flex items-center justify-center rounded-md px-2.5 py-1 text-xs font-medium leading-normal transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                     entityFilter === ent
                       ? 'bg-white text-slate-900 shadow-xs'
                       : 'text-slate-600 hover:text-slate-900'
@@ -233,7 +233,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                 value={classFilter}
                 onChange={(e) => setClassFilter(e.target.value as 'ALL' | PayeeClassification)}
                 aria-label="Filter by classification"
-                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 focus:border-blue-600 focus:outline-none"
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium leading-normal text-slate-700 focus:border-blue-600 focus:outline-none"
               >
                 <option value="ALL">All Classifications</option>
                 <option value="N/A">N/A</option>
@@ -245,7 +245,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                 value={agentFilter}
                 onChange={(e) => setAgentFilter(e.target.value as 'ALL' | YesNo)}
                 aria-label="Filter by withholding agent"
-                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 focus:border-blue-600 focus:outline-none"
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium leading-normal text-slate-700 focus:border-blue-600 focus:outline-none"
               >
                 <option value="ALL">WHT Agent: All</option>
                 <option value="YES">WHT Agent: YES</option>
@@ -259,7 +259,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
           <button
             type="button"
             onClick={() => onToggleNeedsReviewOnly(!needsReviewOnly)}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold leading-normal transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               needsReviewOnly
                 ? 'border-amber-400 bg-amber-50 text-amber-900'
                 : totalFlagged > 0
@@ -267,15 +267,15 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                 : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
             }`}
           >
-            <Filter className="h-3.5 w-3.5" />
-            Needs Review ({totalFlagged})
+            <Filter className="h-3.5 w-3.5 shrink-0" />
+            <span>Needs Review ({totalFlagged})</span>
           </button>
 
           {hasActiveFilters && (
             <button
               type="button"
               onClick={clearFilters}
-              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 cursor-pointer"
+              className="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium leading-normal text-blue-700 hover:bg-blue-50 whitespace-nowrap cursor-pointer"
             >
               Reset Filters
             </button>
@@ -343,9 +343,9 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                 const expectedActual = getRowExpectedActual(row, mode);
                 return (
                   <div key={row.id} className="p-4 space-y-2.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="text-xs text-slate-500">
+                    <div className="flex items-start justify-between gap-2.5">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs leading-normal text-slate-500 break-words">
                           <span className="tabular-nums-mono font-medium text-slate-700">{row.date || '-'}</span>
                           <span aria-hidden="true"> · </span>
                           <span>{row.month || '-'}</span>
@@ -358,28 +358,28 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                               : `${row.payeeClassification ?? 'N/A'} · WHT ${row.withholdingAgent ?? 'NO'}`}
                           </span>
                         </div>
-                        <div className="mt-0.5 font-display text-sm font-semibold text-slate-900">
+                        <div className="mt-0.5 font-display text-sm font-semibold leading-snug text-slate-900 break-words">
                           {row.payor || '(Missing Name)'}
                         </div>
-                        <div className="text-xs text-slate-500">
+                        <div className="text-xs leading-normal text-slate-500 break-words">
                           {row.branchTradeName && <span>{row.branchTradeName} · </span>}
                           <span className="tabular-nums-mono">{row.tin || 'No TIN'}</span>
                         </div>
                         {(row.address || row.address2) && (
-                          <div className="text-[11px] text-slate-500 truncate max-w-[260px]">
+                          <div className="mt-0.5 text-[11px] leading-normal text-slate-500 break-words">
                             {[row.address, row.address2].filter(Boolean).join(', ')}
                           </div>
                         )}
                         {mode === 'PURCHASES' && (row.accountTitle || row.particular) && (
-                          <div className="mt-1 text-xs text-slate-700">
+                          <div className="mt-1 text-xs leading-normal text-slate-700 break-words">
                             <span className="font-semibold">{row.accountTitle || '-'}</span>
                             {row.particular && <span> · {row.particular}</span>}
                           </div>
                         )}
                       </div>
-                      <div className="text-right">
-                        <div className="text-[11px] text-slate-500">TOTAL</div>
-                        <div className="tabular-nums-mono text-sm font-bold text-slate-900">
+                      <div className="text-right shrink-0">
+                        <div className="text-[11px] leading-normal text-slate-500">TOTAL</div>
+                        <div className="tabular-nums-mono text-sm font-bold leading-normal text-slate-900">
                           {formatAccounting(row.total)}
                         </div>
                       </div>
@@ -415,9 +415,9 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                         <button
                           type="button"
                           onClick={() => onFixMathRow(row)}
-                          className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900"
+                          className="inline-flex items-center justify-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium leading-normal text-amber-900 whitespace-nowrap"
                         >
-                          <Wrench className="h-3 w-3" />
+                          <Wrench className="h-3 w-3 shrink-0" />
                           Fix Math
                         </button>
                       )}
@@ -425,34 +425,34 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                         <button
                           type="button"
                           onClick={() => onComputeActualRow(row)}
-                          className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700"
+                          className="inline-flex items-center justify-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium leading-normal text-blue-700 whitespace-nowrap"
                         >
-                          <Calculator className="h-3 w-3" />
+                          <Calculator className="h-3 w-3 shrink-0" />
                           Set Actual
                         </button>
                       )}
                       <button
                         type="button"
                         onClick={() => onDuplicateNextCategory(row)}
-                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700"
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium leading-normal text-slate-700 whitespace-nowrap"
                       >
-                        <CopyPlus className="h-3 w-3" />
+                        <CopyPlus className="h-3 w-3 shrink-0" />
                         Next Cat
                       </button>
                       <button
                         type="button"
                         onClick={() => onEditRow(row)}
-                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700"
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium leading-normal text-slate-700 whitespace-nowrap"
                       >
-                        <Edit3 className="h-3 w-3" />
+                        <Edit3 className="h-3 w-3 shrink-0" />
                         Edit
                       </button>
                       <button
                         type="button"
                         onClick={() => onDeleteRow(row.id)}
-                        className="inline-flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-xs font-medium text-red-700"
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-xs font-medium leading-normal text-red-700"
                       >
-                        <Trash2 className="h-3 w-3" />
+                        <Trash2 className="h-3 w-3 shrink-0" />
                       </button>
                     </div>
                   </div>
@@ -503,16 +503,16 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                     <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom whitespace-nowrap">
                       PAYEE/SUPPLIER
                     </th>
-                    <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom min-w-[170px] leading-tight">
+                    <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom min-w-[170px] leading-normal">
                       CLASSIFICATION OF PAYEE/SUPPLIER (N/A, INDIVIDUAL OR CORP)
                     </th>
                     <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom whitespace-nowrap">
                       TIN
                     </th>
-                    <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom whitespace-nowrap leading-tight">
+                    <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom whitespace-nowrap leading-normal">
                       ADDRESS<br />(BRGY / MUN.)
                     </th>
-                    <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom whitespace-nowrap leading-tight">
+                    <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom whitespace-nowrap leading-normal">
                       ADDRESS<br />(CITY / DIST.)
                     </th>
                     <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom whitespace-nowrap">
@@ -538,7 +538,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                     <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom whitespace-nowrap">
                       N/A, GOODS, SERVICES OR RENTAL
                     </th>
-                    <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom min-w-[130px] leading-tight">
+                    <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom min-w-[130px] leading-normal">
                       WITHHOLDING AGENT (YES OR NO)
                     </th>
                     <th rowSpan={2} className="border border-slate-400 px-2.5 py-2 text-center text-[11px] font-bold align-bottom whitespace-nowrap">
@@ -590,94 +590,106 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                     return (
                       <tr
                         key={row.id}
-                        className={`h-10 transition-colors hover:bg-blue-50/40 ${
+                        className={`transition-colors hover:bg-blue-50/40 ${
                           issues.length > 0 ? 'bg-amber-50/35' : 'bg-white'
                         }`}
                       >
-                        <td className="px-2.5 py-2 tabular-nums-mono whitespace-nowrap text-slate-800">
+                        <td className="px-2.5 py-2.5 tabular-nums-mono whitespace-nowrap leading-normal text-slate-800">
                           {row.date || '-'}
                         </td>
-                        <td className="px-2.5 py-2 whitespace-nowrap font-medium text-slate-700">
+                        <td className="px-2.5 py-2.5 whitespace-nowrap leading-normal font-medium text-slate-700">
                           {row.month || '-'}
                         </td>
-                        <td className="px-2.5 py-2 max-w-[140px] truncate text-slate-700" title={row.branchTradeName}>
-                          {row.branchTradeName || '-'}
+                        <td className="px-2.5 py-2.5 text-slate-700" title={row.branchTradeName}>
+                          <div className="max-w-[140px] truncate leading-normal">
+                            {row.branchTradeName || '-'}
+                          </div>
                         </td>
-                        <td className="px-2.5 py-2 max-w-[190px] truncate font-medium text-slate-900" title={row.payor}>
-                          {row.payor || '-'}
+                        <td className="px-2.5 py-2.5 font-medium text-slate-900" title={row.payor}>
+                          <div className="max-w-[190px] truncate leading-normal">
+                            {row.payor || '-'}
+                          </div>
                         </td>
-                        <td className="px-2.5 py-2 whitespace-nowrap text-slate-700">
+                        <td className="px-2.5 py-2.5 whitespace-nowrap leading-normal text-slate-700">
                           {row.payeeClassification ?? 'N/A'}
                         </td>
-                        <td className="px-2.5 py-2 tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="px-2.5 py-2.5 tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {row.tin || '-'}
                         </td>
-                        <td className="px-2.5 py-2 max-w-[170px] truncate text-slate-600" title={row.address}>
-                          {row.address || '-'}
+                        <td className="px-2.5 py-2.5 text-slate-600" title={row.address}>
+                          <div className="max-w-[170px] truncate leading-normal">
+                            {row.address || '-'}
+                          </div>
                         </td>
-                        <td className="px-2.5 py-2 max-w-[150px] truncate text-slate-600" title={row.address2 ?? ''}>
-                          {row.address2 || '-'}
+                        <td className="px-2.5 py-2.5 text-slate-600" title={row.address2 ?? ''}>
+                          <div className="max-w-[150px] truncate leading-normal">
+                            {row.address2 || '-'}
+                          </div>
                         </td>
-                        <td className="px-2.5 py-2 whitespace-nowrap text-slate-700">
+                        <td className="px-2.5 py-2.5 whitespace-nowrap leading-normal text-slate-700">
                           {row.supportingDocs || '-'}
                         </td>
-                        <td className="px-2.5 py-2 tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="px-2.5 py-2.5 tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {row.referenceNo || '-'}
                         </td>
-                        <td className="bg-amber-50/30 px-2.5 py-2 max-w-[190px] truncate text-slate-800" title={row.particular}>
-                          {row.particular || '-'}
+                        <td className="bg-amber-50/30 px-2.5 py-2.5 text-slate-800" title={row.particular}>
+                          <div className="max-w-[190px] truncate leading-normal">
+                            {row.particular || '-'}
+                          </div>
                         </td>
-                        <td className="bg-amber-50/30 px-2.5 py-2 max-w-[150px] truncate font-medium text-slate-900" title={row.accountTitle}>
-                          {row.accountTitle || '-'}
+                        <td className="bg-amber-50/30 px-2.5 py-2.5 font-medium text-slate-900" title={row.accountTitle}>
+                          <div className="max-w-[150px] truncate leading-normal">
+                            {row.accountTitle || '-'}
+                          </div>
                         </td>
-                        <td className="px-2.5 py-2 whitespace-nowrap font-medium text-slate-800">
+                        <td className="px-2.5 py-2.5 whitespace-nowrap leading-normal font-medium text-slate-800">
                           {row.category}
                         </td>
-                        <td className="border-r border-slate-200 px-2.5 py-2 whitespace-nowrap font-semibold text-slate-700">
+                        <td className="border-r border-slate-200 px-2.5 py-2.5 whitespace-nowrap leading-normal font-semibold text-slate-700">
                           {row.withholdingAgent ?? 'NO'}
                         </td>
 
-                        <td className="px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-800">
+                        <td className="px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-800">
                           {formatAccounting(row.nonVatExempt)}
                         </td>
-                        <td className="px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-800">
+                        <td className="px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-800">
                           {formatAccounting(row.grossOfVat)}
                         </td>
-                        <td className="px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {formatAccounting(row.netOfVat)}
                         </td>
-                        <td className="px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {formatAccounting(row.vat)}
                         </td>
-                        <td className="border-r border-slate-200 px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap font-semibold text-slate-900">
+                        <td className="border-r border-slate-200 px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal font-semibold text-slate-900">
                           {formatAccounting(row.total)}
                         </td>
 
-                        <td className="bg-slate-50/50 px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="bg-slate-50/50 px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {formatAccounting(row.wtGoods1)}
                         </td>
-                        <td className="bg-slate-50/50 px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="bg-slate-50/50 px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {formatAccounting(row.wtServices2)}
                         </td>
-                        <td className="border-r border-slate-200 bg-slate-50/50 px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="border-r border-slate-200 bg-slate-50/50 px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {formatAccounting(row.wtRental5)}
                         </td>
 
                         {/* Actions & Audit */}
-                        <td className="px-2.5 py-1.5 whitespace-nowrap">
+                        <td className="px-2.5 py-2 whitespace-nowrap">
                           <div className="flex items-center justify-center gap-1">
                             {issues.length > 0 ? (
                               <span
                                 title={issues.map((i) => i.message).join('\n')}
-                                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ${
+                                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium leading-normal ${
                                   hasError ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
                                 }`}
                               >
-                                <AlertTriangle className="h-3 w-3" />
-                                {issues.length}
+                                <AlertTriangle className="h-3 w-3 shrink-0" />
+                                <span>{issues.length}</span>
                               </span>
                             ) : (
-                              <span title="Audit passed" className="text-emerald-600 px-1">
+                              <span title="Audit passed" className="inline-flex items-center justify-center text-emerald-600 px-1">
                                 <CheckCircle2 className="h-3.5 w-3.5" />
                               </span>
                             )}
@@ -687,7 +699,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                                 type="button"
                                 onClick={() => onFixMathRow(row)}
                                 title="Auto-fix VAT & Withholding Tax math"
-                                className="rounded p-1 text-amber-700 hover:bg-amber-100 cursor-pointer"
+                                className="inline-flex items-center justify-center rounded p-1 text-amber-700 hover:bg-amber-100 cursor-pointer"
                               >
                                 <Wrench className="h-3.5 w-3.5" />
                               </button>
@@ -697,7 +709,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                               type="button"
                               onClick={() => onDuplicateNextCategory(row)}
                               title="Duplicate Row (Next Category)"
-                              className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-blue-700 cursor-pointer"
+                              className="inline-flex items-center justify-center rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-blue-700 cursor-pointer"
                             >
                               <CopyPlus className="h-3.5 w-3.5" />
                             </button>
@@ -706,7 +718,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                               type="button"
                               onClick={() => onEditRow(row)}
                               title="Edit row"
-                              className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900 cursor-pointer"
+                              className="inline-flex items-center justify-center rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900 cursor-pointer"
                             >
                               <Edit3 className="h-3.5 w-3.5" />
                             </button>
@@ -717,7 +729,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                                   type="button"
                                   onClick={() => onSetAuditStatus(row.id, row.auditStatus === 'APPROVED' ? 'PENDING' : 'APPROVED')}
                                   title={row.auditStatus === 'APPROVED' ? 'Approved (click to revert)' : 'Approve entry'}
-                                  className={`rounded p-1 cursor-pointer ${
+                                  className={`inline-flex items-center justify-center rounded p-1 cursor-pointer ${
                                     row.auditStatus === 'APPROVED'
                                       ? 'bg-emerald-100 text-emerald-700'
                                       : 'text-slate-400 hover:bg-emerald-50 hover:text-emerald-700'
@@ -729,7 +741,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                                   type="button"
                                   onClick={() => onSetAuditStatus(row.id, row.auditStatus === 'FLAGGED' ? 'PENDING' : 'FLAGGED')}
                                   title={row.auditStatus === 'FLAGGED' ? 'Flagged (click to unflag)' : 'Flag entry for client'}
-                                  className={`rounded p-1 cursor-pointer ${
+                                  className={`inline-flex items-center justify-center rounded p-1 cursor-pointer ${
                                     row.auditStatus === 'FLAGGED'
                                       ? 'bg-rose-100 text-rose-700'
                                       : 'text-slate-400 hover:bg-rose-50 hover:text-rose-700'
@@ -742,7 +754,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
 
                             {!isAdminMode && row.auditStatus && row.auditStatus !== 'PENDING' && (
                               <span
-                                className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                                className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold leading-normal ${
                                   row.auditStatus === 'APPROVED'
                                     ? 'bg-emerald-50 text-emerald-700'
                                     : 'bg-rose-50 text-rose-700'
@@ -756,7 +768,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                               type="button"
                               onClick={() => onDeleteRow(row.id)}
                               title="Delete row"
-                              className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 cursor-pointer"
+                              className="inline-flex items-center justify-center rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 cursor-pointer"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>
@@ -872,68 +884,76 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                     return (
                       <tr
                         key={row.id}
-                        className={`h-10 transition-colors hover:bg-blue-50/40 ${
+                        className={`transition-colors hover:bg-blue-50/40 ${
                           issues.length > 0 ? 'bg-amber-50/35' : 'bg-white'
                         }`}
                       >
-                        <td className="px-2.5 py-2 tabular-nums-mono whitespace-nowrap text-slate-800">
+                        <td className="px-2.5 py-2.5 tabular-nums-mono whitespace-nowrap leading-normal text-slate-800">
                           {row.date || '-'}
                         </td>
-                        <td className="px-2.5 py-2 whitespace-nowrap font-medium text-slate-700">
+                        <td className="px-2.5 py-2.5 whitespace-nowrap leading-normal font-medium text-slate-700">
                           {row.month || '-'}
                         </td>
-                        <td className="px-2.5 py-2 max-w-[140px] truncate text-slate-700" title={row.branchTradeName}>
-                          {row.branchTradeName || '-'}
+                        <td className="px-2.5 py-2.5 text-slate-700" title={row.branchTradeName}>
+                          <div className="max-w-[140px] truncate leading-normal">
+                            {row.branchTradeName || '-'}
+                          </div>
                         </td>
-                        <td className="px-2.5 py-2 max-w-[200px] truncate font-medium text-slate-900" title={row.payor}>
-                          {row.payor || '-'}
+                        <td className="px-2.5 py-2.5 font-medium text-slate-900" title={row.payor}>
+                          <div className="max-w-[200px] truncate leading-normal">
+                            {row.payor || '-'}
+                          </div>
                         </td>
-                        <td className="px-2.5 py-2 tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="px-2.5 py-2.5 tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {row.tin || '-'}
                         </td>
-                        <td className="px-2.5 py-2 max-w-[170px] truncate text-slate-600" title={row.address}>
-                          {row.address || '-'}
+                        <td className="px-2.5 py-2.5 text-slate-600" title={row.address}>
+                          <div className="max-w-[170px] truncate leading-normal">
+                            {row.address || '-'}
+                          </div>
                         </td>
-                        <td className="px-2.5 py-2 max-w-[150px] truncate text-slate-600" title={row.address2 ?? ''}>
-                          {row.address2 || '-'}
+                        <td className="px-2.5 py-2.5 text-slate-600" title={row.address2 ?? ''}>
+                          <div className="max-w-[150px] truncate leading-normal">
+                            {row.address2 || '-'}
+                          </div>
                         </td>
-                        <td className="px-2.5 py-2 whitespace-nowrap font-medium text-slate-800">
+                        <td className="px-2.5 py-2.5 whitespace-nowrap leading-normal font-medium text-slate-800">
                           {row.category}
                         </td>
-                        <td className="border-r border-slate-200 px-2.5 py-2 whitespace-nowrap font-medium text-slate-700">
+                        <td className="border-r border-slate-200 px-2.5 py-2.5 whitespace-nowrap leading-normal font-medium text-slate-700">
                           {row.privateOrGovt}
                         </td>
 
-                        <td className="px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-800">
+                        <td className="px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-800">
                           {formatAccounting(row.nonVatExempt)}
                         </td>
-                        <td className="px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-800">
+                        <td className="px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-800">
                           {formatAccounting(row.grossOfVat)}
                         </td>
-                        <td className="px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {formatAccounting(row.netOfVat)}
                         </td>
-                        <td className="px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {formatAccounting(row.vat)}
                         </td>
-                        <td className="border-r border-slate-200 px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap font-semibold text-slate-900">
+                        <td className="border-r border-slate-200 px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal font-semibold text-slate-900">
                           {formatAccounting(row.total)}
                         </td>
 
-                        <td className="bg-slate-50/50 px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="bg-slate-50/50 px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {formatAccounting(row.wtGoods1)}
                         </td>
-                        <td className="bg-slate-50/50 px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="bg-slate-50/50 px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {formatAccounting(row.wtServices2)}
                         </td>
-                        <td className="bg-slate-50/50 px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="bg-slate-50/50 px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {formatAccounting(row.wtRental5)}
                         </td>
-                        <td className="border-r border-slate-200 bg-slate-50/50 px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap text-slate-700">
+                        <td className="border-r border-slate-200 bg-slate-50/50 px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal text-slate-700">
                           {formatAccounting(row.wtVat5)}
                         </td>
 
-                        <td className="border-r border-slate-200 px-2.5 py-2 text-right tabular-nums-mono whitespace-nowrap font-semibold text-slate-900">
+                        <td className="border-r border-slate-200 px-2.5 py-2.5 text-right tabular-nums-mono whitespace-nowrap leading-normal font-semibold text-slate-900">
                           <div className="flex items-center justify-end gap-1.5">
                             <span>{formatAccounting(row.actual)}</span>
                             {row.actual === null && expectedActual !== null && (
@@ -941,7 +961,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                                 type="button"
                                 onClick={() => onComputeActualRow(row)}
                                 title={`Compute Expected Actual (${formatAccounting(expectedActual)})`}
-                                className="rounded p-0.5 text-blue-600 hover:bg-blue-50 cursor-pointer"
+                                className="inline-flex items-center justify-center rounded p-0.5 text-blue-600 hover:bg-blue-50 cursor-pointer"
                               >
                                 <Calculator className="h-3 w-3" />
                               </button>
@@ -949,24 +969,26 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                           </div>
                         </td>
 
-                        <td className="border-r border-slate-200 px-2.5 py-2 max-w-[180px] truncate text-slate-600" title={row.remarks}>
-                          {row.remarks || '-'}
+                        <td className="border-r border-slate-200 px-2.5 py-2.5 text-slate-600" title={row.remarks}>
+                          <div className="max-w-[180px] truncate leading-normal">
+                            {row.remarks || '-'}
+                          </div>
                         </td>
 
-                        <td className="px-2.5 py-1.5 whitespace-nowrap">
+                        <td className="px-2.5 py-2 whitespace-nowrap">
                           <div className="flex items-center justify-center gap-1">
                             {issues.length > 0 ? (
                               <span
                                 title={issues.map((i) => i.message).join('\n')}
-                                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ${
+                                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium leading-normal ${
                                   hasError ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
                                 }`}
                               >
-                                <AlertTriangle className="h-3 w-3" />
-                                {issues.length}
+                                <AlertTriangle className="h-3 w-3 shrink-0" />
+                                <span>{issues.length}</span>
                               </span>
                             ) : (
-                              <span title="Audit passed" className="text-emerald-600 px-1">
+                              <span title="Audit passed" className="inline-flex items-center justify-center text-emerald-600 px-1">
                                 <CheckCircle2 className="h-3.5 w-3.5" />
                               </span>
                             )}
@@ -976,7 +998,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                                 type="button"
                                 onClick={() => onFixMathRow(row)}
                                 title="Auto-fix VAT & Withholding Tax math"
-                                className="rounded p-1 text-amber-700 hover:bg-amber-100 cursor-pointer"
+                                className="inline-flex items-center justify-center rounded p-1 text-amber-700 hover:bg-amber-100 cursor-pointer"
                               >
                                 <Wrench className="h-3.5 w-3.5" />
                               </button>
@@ -986,7 +1008,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                               type="button"
                               onClick={() => onDuplicateNextCategory(row)}
                               title="Duplicate Row (Next Category)"
-                              className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-blue-700 cursor-pointer"
+                              className="inline-flex items-center justify-center rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-blue-700 cursor-pointer"
                             >
                               <CopyPlus className="h-3.5 w-3.5" />
                             </button>
@@ -995,7 +1017,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                               type="button"
                               onClick={() => onEditRow(row)}
                               title="Edit row"
-                              className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900 cursor-pointer"
+                              className="inline-flex items-center justify-center rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900 cursor-pointer"
                             >
                               <Edit3 className="h-3.5 w-3.5" />
                             </button>
@@ -1006,7 +1028,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                                   type="button"
                                   onClick={() => onSetAuditStatus(row.id, row.auditStatus === 'APPROVED' ? 'PENDING' : 'APPROVED')}
                                   title={row.auditStatus === 'APPROVED' ? 'Approved (click to revert)' : 'Approve entry'}
-                                  className={`rounded p-1 cursor-pointer ${
+                                  className={`inline-flex items-center justify-center rounded p-1 cursor-pointer ${
                                     row.auditStatus === 'APPROVED'
                                       ? 'bg-emerald-100 text-emerald-700'
                                       : 'text-slate-400 hover:bg-emerald-50 hover:text-emerald-700'
@@ -1018,7 +1040,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                                   type="button"
                                   onClick={() => onSetAuditStatus(row.id, row.auditStatus === 'FLAGGED' ? 'PENDING' : 'FLAGGED')}
                                   title={row.auditStatus === 'FLAGGED' ? 'Flagged (click to unflag)' : 'Flag entry for client'}
-                                  className={`rounded p-1 cursor-pointer ${
+                                  className={`inline-flex items-center justify-center rounded p-1 cursor-pointer ${
                                     row.auditStatus === 'FLAGGED'
                                       ? 'bg-rose-100 text-rose-700'
                                       : 'text-slate-400 hover:bg-rose-50 hover:text-rose-700'
@@ -1031,7 +1053,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
 
                             {!isAdminMode && row.auditStatus && row.auditStatus !== 'PENDING' && (
                               <span
-                                className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                                className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold leading-normal ${
                                   row.auditStatus === 'APPROVED'
                                     ? 'bg-emerald-50 text-emerald-700'
                                     : 'bg-rose-50 text-rose-700'
@@ -1045,7 +1067,7 @@ export const LedgerTable: React.FC<LedgerTableProps> = ({
                               type="button"
                               onClick={() => onDeleteRow(row.id)}
                               title="Delete row"
-                              className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 cursor-pointer"
+                              className="inline-flex items-center justify-center rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 cursor-pointer"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>

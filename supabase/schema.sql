@@ -37,19 +37,20 @@ CREATE TABLE IF NOT EXISTS public.user_profiles (
     CHECK (role IN ('admin', 'client')),
   client_directory_id uuid REFERENCES public.client_directories(id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT client_requires_directory CHECK (
-    role = 'admin' OR client_directory_id IS NOT NULL
-  )
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_profiles_role ON public.user_profiles(role);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_client ON public.user_profiles(client_directory_id);
 
--- View named `profiles` for ergonomic querying if needed
-CREATE OR REPLACE VIEW public.profiles AS
+-- View named `profiles` with security_invoker so user_profiles RLS is strictly enforced
+CREATE OR REPLACE VIEW public.profiles
+WITH (security_invoker = true) AS
 SELECT id, email, full_name, role, client_directory_id, created_at, updated_at
 FROM public.user_profiles;
+
+REVOKE ALL ON public.profiles FROM anon, public;
+GRANT SELECT ON public.profiles TO authenticated;
 
 -- ----------------------------------------------------------------------------
 -- 3. LEDGER ENTRIES (SALES, PURCHASES / SLP, EXPENSES)
@@ -196,7 +197,9 @@ CREATE TRIGGER trg_xlsx_files_updated
   BEFORE UPDATE ON public.xlsx_files
   FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
--- Automatically populate user_profiles when an admin creates a user via Supabase Auth
+-- Automatically populate user_profiles with least-privilege defaults only.
+-- NEVER trust client-supplied raw_user_meta_data for role or client_directory_id.
+-- Only an authenticated Admin may assign client_directory_id or promote roles.
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -204,25 +207,12 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  meta_role text;
-  meta_client_id uuid;
   meta_name text;
 BEGIN
-  meta_role := COALESCE(NEW.raw_user_meta_data ->> 'role', 'client');
-  IF meta_role NOT IN ('admin', 'client') THEN
-    meta_role := 'client';
-  END IF;
-
-  IF NULLIF(NEW.raw_user_meta_data ->> 'client_directory_id', '') IS NOT NULL THEN
-    meta_client_id := (NEW.raw_user_meta_data ->> 'client_directory_id')::uuid;
-  ELSE
-    meta_client_id := NULL;
-  END IF;
-
   meta_name := COALESCE(NEW.raw_user_meta_data ->> 'full_name', '');
 
   INSERT INTO public.user_profiles (id, email, full_name, role, client_directory_id)
-  VALUES (NEW.id, NEW.email, meta_name, meta_role, meta_client_id)
+  VALUES (NEW.id, NEW.email, meta_name, 'client', NULL)
   ON CONFLICT (id) DO UPDATE
     SET email = EXCLUDED.email,
         full_name = CASE WHEN EXCLUDED.full_name <> '' THEN EXCLUDED.full_name ELSE public.user_profiles.full_name END;
@@ -268,6 +258,43 @@ SET search_path = public
 AS $$
   SELECT COALESCE((SELECT role = 'admin' FROM public.user_profiles WHERE id = auth.uid() LIMIT 1), false);
 $$;
+
+REVOKE ALL ON FUNCTION public.current_user_role() FROM anon, public;
+REVOKE ALL ON FUNCTION public.current_user_client_id() FROM anon, public;
+REVOKE ALL ON FUNCTION public.is_admin() FROM anon, public;
+GRANT EXECUTE ON FUNCTION public.current_user_role() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.current_user_client_id() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated;
+
+-- Prevent non-admin users from self-approving audit_status or forging created_by
+CREATE OR REPLACE FUNCTION public.enforce_ledger_audit_integrity()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NOT public.is_admin() THEN
+    IF TG_OP = 'INSERT' THEN
+      NEW.audit_status := 'PENDING';
+      NEW.audit_note := '';
+      IF auth.uid() IS NOT NULL THEN
+        NEW.created_by := auth.uid();
+      END IF;
+    ELSIF TG_OP = 'UPDATE' THEN
+      NEW.audit_status := OLD.audit_status;
+      NEW.audit_note := OLD.audit_note;
+      NEW.created_by := OLD.created_by;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_ledger_audit_integrity ON public.ledger_entries;
+CREATE TRIGGER trg_ledger_audit_integrity
+  BEFORE INSERT OR UPDATE ON public.ledger_entries
+  FOR EACH ROW EXECUTE FUNCTION public.enforce_ledger_audit_integrity();
 
 -- ----------------------------------------------------------------------------
 -- 8. ROW-LEVEL SECURITY (RLS) POLICIES FOR DATABASE TABLES
@@ -438,7 +465,7 @@ CREATE POLICY "Admins full access ledger-vault"
   USING (bucket_id = 'ledger-vault' AND public.is_admin())
   WITH CHECK (bucket_id = 'ledger-vault' AND public.is_admin());
 
--- Clients: SELECT, INSERT, UPDATE strictly inside /{client_directory_id}/...
+-- Clients: SELECT, INSERT, UPDATE strictly inside /{client_directory_id}/... (block path traversal)
 DROP POLICY IF EXISTS "Clients select own vault objects" ON storage.objects;
 CREATE POLICY "Clients select own vault objects"
   ON storage.objects
@@ -446,6 +473,8 @@ CREATE POLICY "Clients select own vault objects"
   TO authenticated
   USING (
     bucket_id = 'ledger-vault'
+    AND public.current_user_client_id() IS NOT NULL
+    AND name !~ '\.\.'
     AND (storage.foldername(name))[1] = public.current_user_client_id()::text
   );
 
@@ -456,6 +485,8 @@ CREATE POLICY "Clients insert own vault objects"
   TO authenticated
   WITH CHECK (
     bucket_id = 'ledger-vault'
+    AND public.current_user_client_id() IS NOT NULL
+    AND name !~ '\.\.'
     AND (storage.foldername(name))[1] = public.current_user_client_id()::text
   );
 
@@ -466,9 +497,13 @@ CREATE POLICY "Clients update own vault objects"
   TO authenticated
   USING (
     bucket_id = 'ledger-vault'
+    AND public.current_user_client_id() IS NOT NULL
+    AND name !~ '\.\.'
     AND (storage.foldername(name))[1] = public.current_user_client_id()::text
   )
   WITH CHECK (
     bucket_id = 'ledger-vault'
+    AND public.current_user_client_id() IS NOT NULL
+    AND name !~ '\.\.'
     AND (storage.foldername(name))[1] = public.current_user_client_id()::text
   );

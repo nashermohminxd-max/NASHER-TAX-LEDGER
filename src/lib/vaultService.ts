@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import { unzipSync, zipSync, strFromU8, strToU8, type Zippable } from 'fflate';
 import type { VaultXlsxFile, XlsxPreviewData } from '@/types/portal';
 import { isSupabaseConfigured, supabase, supabaseAnonKey, supabaseUrl } from '@/lib/supabase';
 
@@ -17,6 +17,7 @@ export function formatFileSize(bytes: number): string {
 
 export function sanitizeSegment(raw: string, fallback: string): string {
   const cleaned = (raw || '')
+    .replace(/[\x00-\x1f\x7f]/g, '')
     .trim()
     .replace(/\.\./g, '')
     .replace(/[^a-zA-Z0-9._-]+/g, '-')
@@ -25,8 +26,14 @@ export function sanitizeSegment(raw: string, fallback: string): string {
 }
 
 export function sanitizeFilename(fileName: string): string {
-  const base = (fileName || 'workbook.xlsx').split(/[\\/]/).pop() ?? 'workbook.xlsx';
-  const cleaned = base.replace(/[^a-zA-Z0-9._ -]+/g, '_').trim();
+  const base = (fileName || 'workbook.xlsx')
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .split(/[\\/]/)
+    .pop() ?? 'workbook.xlsx';
+  const cleaned = base
+    .replace(/\.\./g, '')
+    .replace(/[^a-zA-Z0-9._ -]+/g, '_')
+    .trim();
   return cleaned || 'workbook.xlsx';
 }
 
@@ -101,9 +108,93 @@ export async function deleteLocalVaultBlob(storagePath: string): Promise<void> {
   }
 }
 
+function parseCellRefColIndex(ref: string): number {
+  const match = /^([A-Z]+)/i.exec(ref);
+  if (!match) return -1;
+  const letters = match[1].toUpperCase();
+  let col = 0;
+  for (let i = 0; i < letters.length; i++) {
+    col = col * 26 + (letters.charCodeAt(i) - 64);
+  }
+  return col - 1;
+}
+
+function parseXmlDocument(xmlText: string): Document {
+  const parser = new DOMParser();
+  return parser.parseFromString(xmlText, 'application/xml');
+}
+
+function extractSharedStrings(xmlText: string): string[] {
+  const doc = parseXmlDocument(xmlText);
+  const items = doc.getElementsByTagName('si');
+  const out: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const tNodes = items[i].getElementsByTagName('t');
+    let text = '';
+    for (let j = 0; j < tNodes.length; j++) {
+      text += tNodes[j].textContent ?? '';
+    }
+    out.push(text);
+  }
+  return out;
+}
+
+function parseWorksheetFirst21Rows(xmlText: string, sharedStrings: string[]): string[][] {
+  const doc = parseXmlDocument(xmlText);
+  const rowNodes = doc.getElementsByTagName('row');
+  const rows: string[][] = [];
+
+  for (let r = 0; r < rowNodes.length && rows.length < 21; r++) {
+    const rowEl = rowNodes[r];
+    const cellNodes = rowEl.getElementsByTagName('c');
+    const rowArr: string[] = [];
+    let hasContent = false;
+
+    for (let c = 0; c < cellNodes.length; c++) {
+      const cell = cellNodes[c];
+      const ref = cell.getAttribute('r') ?? '';
+      const colIdx = parseCellRefColIndex(ref);
+      const targetIdx = colIdx >= 0 ? colIdx : rowArr.length;
+      if (targetIdx > 150) continue; // cap columns to prevent memory exhaustion
+
+      const cellType = cell.getAttribute('t') ?? '';
+      let val = '';
+
+      if (cellType === 'inlineStr') {
+        const tNodes = cell.getElementsByTagName('t');
+        for (let k = 0; k < tNodes.length; k++) {
+          val += tNodes[k].textContent ?? '';
+        }
+      } else {
+        const vNode = cell.getElementsByTagName('v')[0];
+        const rawVal = vNode?.textContent ?? '';
+        if (cellType === 's') {
+          const idx = parseInt(rawVal, 10);
+          val = Number.isInteger(idx) && idx >= 0 && idx < sharedStrings.length ? sharedStrings[idx] : '';
+        } else if (cellType === 'b') {
+          val = rawVal === '1' ? 'TRUE' : 'FALSE';
+        } else {
+          val = rawVal;
+        }
+      }
+
+      const trimmed = val.trim();
+      if (trimmed) hasContent = true;
+      while (rowArr.length <= targetIdx) rowArr.push('');
+      rowArr[targetIdx] = trimmed;
+    }
+
+    if (hasContent) {
+      rows.push(rowArr);
+    }
+  }
+
+  return rows;
+}
+
 /**
- * Uses SheetJS (xlsx) client-side to parse ONLY the first 20 data rows (+ header row)
- * so previewing large workbooks stays fast and responsive.
+ * Pure-browser OOXML (.xlsx / .xlsm) parser built on `fflate` + native `DOMParser`
+ * extracting ONLY the first 20 data rows (+ header row), immune to SheetJS Prototype Pollution & ReDoS.
  */
 export async function previewXlsxFirst20Rows(
   fileOrBlob: File | Blob,
@@ -116,7 +207,7 @@ export async function previewXlsxFirst20Rows(
       headers: ['Notice'],
       rows: [
         [
-          `File size (${formatFileSize(fileOrBlob.size)}) exceeds the 150 MB in-browser SheetJS preview cap. Direct cloud upload and download still work at full multi-GB size.`,
+          `File size (${formatFileSize(fileOrBlob.size)}) exceeds the 150 MB in-browser preview cap. Direct cloud upload and download still work at full multi-GB size.`,
         ],
       ],
       totalEstimatedRows: 0,
@@ -124,36 +215,116 @@ export async function previewXlsxFirst20Rows(
   }
 
   const buffer = await fileOrBlob.arrayBuffer();
-  const workbook = XLSX.read(buffer, {
-    type: 'array',
-    sheetRows: 21,
-    dense: true,
+  const bytes = new Uint8Array(buffer);
+
+  // Check ZIP magic header (PK\x03\x04); legacy binary .xls files don't use ZIP OOXML
+  if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+    return {
+      sheetName: 'Workbook',
+      sheetNames: ['Workbook'],
+      headers: ['Notice'],
+      rows: [['Preview is supported for .xlsx / .xlsm OpenXML workbooks. Binary .xls files are stored directly.']],
+      totalEstimatedRows: 0,
+    };
+  }
+
+  const zipEntries = unzipSync(bytes, {
+    filter: (entry) => {
+      const name = entry.name.toLowerCase();
+      return (
+        entry.originalSize <= 64 * 1024 * 1024 &&
+        (name === 'xl/workbook.xml' ||
+          name === 'xl/_rels/workbook.xml.rels' ||
+          name === 'xl/sharedstrings.xml' ||
+          (name.startsWith('xl/worksheets/') && name.endsWith('.xml')))
+      );
+    },
   });
 
-  const sheetNames = workbook.SheetNames;
-  if (sheetNames.length === 0) {
+  const getEntryText = (targetPath: string): string | null => {
+    const exact = zipEntries[targetPath];
+    if (exact) return strFromU8(exact);
+    const lowerTarget = targetPath.toLowerCase();
+    for (const [key, data] of Object.entries(zipEntries)) {
+      if (key.toLowerCase() === lowerTarget) return strFromU8(data);
+    }
+    return null;
+  };
+
+  const workbookXml = getEntryText('xl/workbook.xml');
+  const relsXml = getEntryText('xl/_rels/workbook.xml.rels');
+
+  const sheetMap: { name: string; path: string }[] = [];
+  if (workbookXml) {
+    const relTargets = new Map<string, string>();
+    if (relsXml) {
+      const relDoc = parseXmlDocument(relsXml);
+      const rels = relDoc.getElementsByTagName('Relationship');
+      for (let i = 0; i < rels.length; i++) {
+        const id = rels[i].getAttribute('Id') ?? '';
+        const target = rels[i].getAttribute('Target') ?? '';
+        if (id && target) {
+          const normalized = target.startsWith('/')
+            ? target.slice(1)
+            : target.startsWith('xl/')
+            ? target
+            : `xl/${target.replace(/^\.\//, '')}`;
+          relTargets.set(id, normalized);
+        }
+      }
+    }
+
+    const wbDoc = parseXmlDocument(workbookXml);
+    const sheets = wbDoc.getElementsByTagName('sheet');
+    for (let i = 0; i < sheets.length; i++) {
+      const name = sheets[i].getAttribute('name') || `Sheet${i + 1}`;
+      const rId =
+        sheets[i].getAttribute('r:id') ??
+        sheets[i].getAttributeNS(
+          'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+          'id'
+        ) ??
+        '';
+      const target = relTargets.get(rId) || `xl/worksheets/sheet${i + 1}.xml`;
+      sheetMap.push({ name, path: target });
+    }
+  }
+
+  if (sheetMap.length === 0) {
+    const fallbackSheet = Object.keys(zipEntries)
+      .filter((k) => k.toLowerCase().startsWith('xl/worksheets/') && k.toLowerCase().endsWith('.xml'))
+      .sort()[0];
+    if (!fallbackSheet) {
+      return {
+        sheetName: '',
+        sheetNames: [],
+        headers: [],
+        rows: [],
+        totalEstimatedRows: 0,
+      };
+    }
+    sheetMap.push({ name: 'Sheet1', path: fallbackSheet });
+  }
+
+  const sheetNames = sheetMap.map((s) => s.name);
+  const chosen =
+    (preferredSheet && sheetMap.find((s) => s.name === preferredSheet)) || sheetMap[0];
+
+  const sharedStringsXml = getEntryText('xl/sharedStrings.xml');
+  const sharedStrings = sharedStringsXml ? extractSharedStrings(sharedStringsXml) : [];
+  const sheetXml = getEntryText(chosen.path);
+
+  if (!sheetXml) {
     return {
-      sheetName: '',
-      sheetNames: [],
+      sheetName: chosen.name,
+      sheetNames,
       headers: [],
       rows: [],
       totalEstimatedRows: 0,
     };
   }
 
-  const targetSheetName =
-    preferredSheet && sheetNames.includes(preferredSheet) ? preferredSheet : sheetNames[0];
-  const sheet = workbook.Sheets[targetSheetName];
-  const rawAoA = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
-    header: 1,
-    defval: '',
-    blankrows: false,
-  });
-
-  const cleanRows = rawAoA
-    .slice(0, 21)
-    .map((row) => (Array.isArray(row) ? row.map((cell) => String(cell ?? '').trim()) : []));
-
+  const cleanRows = parseWorksheetFirst21Rows(sheetXml, sharedStrings);
   const maxCols = cleanRows.reduce((max, r) => Math.max(max, r.length), 0);
   const normalizedRows = cleanRows.map((r) => {
     const padded = [...r];
@@ -167,16 +338,71 @@ export async function previewXlsxFirst20Rows(
       : Array.from({ length: maxCols }, (_, i) => `Column ${i + 1}`);
 
   const dataRows = normalizedRows.slice(1, 21);
-  const rangeRef = sheet['!ref'] ? XLSX.utils.decode_range(sheet['!ref']) : null;
-  const totalEstimatedRows = rangeRef ? Math.max(0, rangeRef.e.r) : dataRows.length;
-
   return {
-    sheetName: targetSheetName,
+    sheetName: chosen.name,
     sheetNames,
     headers,
     rows: dataRows,
-    totalEstimatedRows,
+    totalEstimatedRows: dataRows.length,
   };
+}
+
+function xmlEsc(str: string): string {
+  return (str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function colRef(colIdx0: number, row1: number): string {
+  let n = colIdx0 + 1;
+  let col = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    col = String.fromCharCode(65 + rem) + col;
+    n = Math.floor((n - 1) / 26);
+  }
+  return `${col}${row1}`;
+}
+
+function buildFallbackWorkbookBlob(sheetName: string, rows: string[][]): Blob {
+  const safeSheet = xmlEsc((sheetName || 'Sheet1').slice(0, 31));
+  const rowsXml = rows
+    .map(
+      (r, rIdx) =>
+        `<row r="${rIdx + 1}">${r
+          .map(
+            (val, cIdx) =>
+              `<c r="${colRef(cIdx, rIdx + 1)}" t="inlineStr"><is><t>${xmlEsc(val)}</t></is></c>`
+          )
+          .join('')}</row>`
+    )
+    .join('');
+
+  const files: Zippable = {
+    '[Content_Types].xml': strToU8(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`
+    ),
+    '_rels/.rels': strToU8(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`
+    ),
+    'xl/workbook.xml': strToU8(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${safeSheet}" sheetId="1" r:id="rId1"/></sheets></workbook>`
+    ),
+    'xl/_rels/workbook.xml.rels': strToU8(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`
+    ),
+    'xl/worksheets/sheet1.xml': strToU8(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowsXml}</sheetData></worksheet>`
+    ),
+  };
+
+  const zipped = zipSync(files, { level: 0 });
+  return new Blob([new Uint8Array(zipped)], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
 }
 
 /**
@@ -191,8 +417,11 @@ export async function uploadXlsxDirectToVault(params: {
 }): Promise<void> {
   const { file, storagePath, onProgress } = params;
 
+  if (!storagePath || storagePath.includes('..') || storagePath.startsWith('/')) {
+    throw new Error('Invalid storage path.');
+  }
+
   if (!isSupabaseConfigured || !supabase) {
-    // Local preview IndexedDB fallback with smooth progress reporting
     const steps = 8;
     for (let i = 1; i < steps; i++) {
       await new Promise((r) => setTimeout(r, 45));
@@ -263,15 +492,10 @@ export async function downloadVaultXlsxBlob(fileRecord: VaultXlsxFile): Promise<
     const localBlob = await loadLocalVaultBlob(fileRecord.storagePath);
     if (localBlob) return localBlob;
 
-    // Fallback: reconstruct workbook from stored preview headers/rows if pre-seeded demo entry
-    const wb = XLSX.utils.book_new();
-    const aoa = [fileRecord.previewHeaders, ...fileRecord.previewRows];
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    XLSX.utils.book_append_sheet(wb, ws, fileRecord.sheetName || 'Sheet1');
-    const out = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
-    return new Blob([out], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
+    return buildFallbackWorkbookBlob(fileRecord.sheetName || 'Sheet1', [
+      fileRecord.previewHeaders,
+      ...fileRecord.previewRows,
+    ]);
   }
 
   const { data, error } = await supabase.storage
@@ -284,10 +508,11 @@ export async function downloadVaultXlsxBlob(fileRecord: VaultXlsxFile): Promise<
 }
 
 export function triggerBlobDownload(blob: Blob, fileName: string): void {
+  const safeName = sanitizeFilename(fileName);
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = fileName;
+  anchor.download = safeName;
   document.body.appendChild(anchor);
   anchor.click();
   document.body.removeChild(anchor);

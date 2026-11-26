@@ -8,6 +8,7 @@ import type {
   TransactionCategory,
   YesNo,
 } from '../types/tax';
+import { stripControlChars } from '../lib/validation';
 import {
   deriveMonthFromDate,
   formatAccounting,
@@ -16,7 +17,34 @@ import {
   parseAmount,
 } from './taxEngine';
 
+const MAX_CSV_CHARS = 10 * 1024 * 1024;
+const MAX_CSV_ROWS = 25_000;
+
+export function neutralizeSpreadsheetFormula(val: string): string {
+  const s = val ?? '';
+  if (!s) return s;
+  // Preserve literal dash placeholder and plain negative numeric values
+  if (s === '-' || /^-\d[\d,]*(\.\d+)?$/.test(s)) {
+    return s;
+  }
+  const first = s[0];
+  if (
+    first === '=' ||
+    first === '+' ||
+    first === '-' ||
+    first === '@' ||
+    first === '\t' ||
+    first === '\r'
+  ) {
+    return `'${s}`;
+  }
+  return s;
+}
+
 export function parseCsvMatrix(csvText: string): string[][] {
+  if (csvText.length > MAX_CSV_CHARS) {
+    throw new Error('CSV file exceeds the maximum 10 MB size limit.');
+  }
   const clean = csvText.replace(/^\uFEFF/, '');
   const rows: string[][] = [];
   let row: string[] = [];
@@ -44,12 +72,18 @@ export function parseCsvMatrix(csvText: string): string[][] {
         field = '';
       } else if (ch === '\r' && next === '\n') {
         row.push(field.trim());
+        if (rows.length >= MAX_CSV_ROWS) {
+          throw new Error(`CSV exceeds maximum limit of ${MAX_CSV_ROWS.toLocaleString()} rows.`);
+        }
         rows.push(row);
         row = [];
         field = '';
         i++;
       } else if (ch === '\n' || ch === '\r') {
         row.push(field.trim());
+        if (rows.length >= MAX_CSV_ROWS) {
+          throw new Error(`CSV exceeds maximum limit of ${MAX_CSV_ROWS.toLocaleString()} rows.`);
+        }
         rows.push(row);
         row = [];
         field = '';
@@ -61,6 +95,9 @@ export function parseCsvMatrix(csvText: string): string[][] {
 
   if (field.length > 0 || row.length > 0) {
     row.push(field.trim());
+    if (rows.length >= MAX_CSV_ROWS) {
+      throw new Error(`CSV exceeds maximum limit of ${MAX_CSV_ROWS.toLocaleString()} rows.`);
+    }
     rows.push(row);
   }
 
@@ -68,10 +105,11 @@ export function parseCsvMatrix(csvText: string): string[][] {
 }
 
 function escapeCsvCell(val: string): string {
-  if (val.includes(',') || val.includes('"') || val.includes('\n')) {
-    return `"${val.replace(/"/g, '""')}"`;
+  const safe = neutralizeSpreadsheetFormula(val);
+  if (safe.includes(',') || safe.includes('"') || safe.includes('\n') || safe.includes('\r')) {
+    return `"${safe.replace(/"/g, '""')}"`;
   }
-  return val;
+  return safe;
 }
 
 function normalizeHeader(s: string): string {
@@ -237,7 +275,7 @@ export function importFilingCsv(
     const cells = matrix[r];
     if (!cells || cells.every((c) => !c || c === '-')) continue;
 
-    const getCell = (idx: number) => (idx >= 0 ? cells[idx] || '' : '');
+    const getCell = (idx: number) => (idx >= 0 ? stripControlChars(cells[idx] || '') : '');
 
     const rawDate = getCell(colMap.date);
     const rawMonth = getCell(colMap.month);
@@ -261,7 +299,7 @@ export function importFilingCsv(
     const wtRental5 = parseAmount(getCell(colMap.wtRental5));
     const wtVat5 = parseAmount(getCell(colMap.wtVat5));
     const actual = parseAmount(getCell(colMap.actual));
-    const remarks = getCell(colMap.remarks).trim();
+    const remarks = stripControlChars(getCell(colMap.remarks));
 
     const hasTransactionData =
       rawDate !== '' ||
@@ -570,9 +608,9 @@ export function importTinDirectoryCsv(csvText: string): TinRecord[] {
   for (let i = 1; i < matrix.length; i++) {
     const row = matrix[i];
     if (!row || row.every((c) => !c)) continue;
-    const rawTin = row[idxTin >= 0 ? idxTin : 0] || '';
+    const rawTin = stripControlChars(row[idxTin >= 0 ? idxTin : 0] || '');
     const digits = normalizeTinDigits(rawTin);
-    const payor = (row[idxPayor >= 0 ? idxPayor : 1] || '').trim();
+    const payor = stripControlChars(row[idxPayor >= 0 ? idxPayor : 1] || '');
     if (!digits && !payor) continue;
 
     const privRaw = normalizeHeader(row[idxPriv >= 0 ? idxPriv : 5] || '');
@@ -586,9 +624,9 @@ export function importTinDirectoryCsv(csvText: string): TinRecord[] {
       tin: formatTin(digits),
       digits,
       payor,
-      branchTradeName: (row[idxBranch >= 0 ? idxBranch : 2] || '').trim(),
-      address: (row[idxAddr >= 0 ? idxAddr : 3] || '').trim(),
-      address2: idxAddr2 >= 0 ? (row[idxAddr2] || '').trim() : '',
+      branchTradeName: stripControlChars(row[idxBranch >= 0 ? idxBranch : 2] || ''),
+      address: stripControlChars(row[idxAddr >= 0 ? idxAddr : 3] || ''),
+      address2: idxAddr2 >= 0 ? stripControlChars(row[idxAddr2] || '') : '',
       defaultPrivateOrGovt: privRaw === 'GOVT' ? 'GOVT' : 'PRIVATE',
       defaultCategory:
         catRaw === 'N/A'
@@ -604,7 +642,7 @@ export function importTinDirectoryCsv(csvText: string): TinRecord[] {
         : classRaw.includes('CORP')
         ? 'CORP'
         : 'N/A',
-      defaultAccountTitle: idxAcct >= 0 ? (row[idxAcct] || '').trim().toUpperCase() : '',
+      defaultAccountTitle: idxAcct >= 0 ? stripControlChars(row[idxAcct] || '').toUpperCase() : '',
       defaultWithholdingAgent: agentRaw === 'NO' ? 'NO' : 'YES',
       createdAt: now,
       updatedAt: now,
